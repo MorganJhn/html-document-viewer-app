@@ -333,7 +333,7 @@ export const DocumentFrame = forwardRef<DocumentFrameHandle, DocumentFrameProps>
       return
     }
 
-    console.log('commitSelection - paths:', paths, 'shiftKey:', event.shiftKey, 'ctrlKey:', event.ctrlKey, 'metaKey:', event.metaKey, 'selectedPaths:', selectedPathsRef.current)
+
     let nextPaths = unique(paths)
     if (event.ctrlKey || event.metaKey || event.shiftKey) {
       const existing = new Set(selectedPathsRef.current)

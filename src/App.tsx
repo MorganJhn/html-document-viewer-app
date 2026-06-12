@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Download,
   FileText,
@@ -15,14 +15,26 @@ import {
   Check,
   Eye,
   Plus,
-} from 'lucide-react'
-import './App.css'
-import { api, getStoredToken, setStoredToken } from './api'
-import { DocumentFrame, type DocumentFrameHandle } from './components/DocumentFrame'
-import { InspectorPanel, type InspectorTab } from './components/InspectorPanel'
-import { IconButton, ContextMenu, type ContextMenuItem, ToastContainer, Field, Dialog, NewDocumentModal } from './components/ui'
-import { triggerConfetti, toast } from './lib/utils'
-import { DEFAULT_SETTINGS } from './lib/documentSettings'
+} from "lucide-react";
+import "./App.css";
+import { api, getStoredToken, setStoredToken } from "./api";
+import {
+  DocumentFrame,
+  type DocumentFrameHandle,
+} from "./components/DocumentFrame";
+import { InspectorPanel, type InspectorTab } from "./components/InspectorPanel";
+import {
+  IconButton,
+  ContextMenu,
+  type ContextMenuItem,
+  ToastContainer,
+  Field,
+  Dialog,
+  NewDocumentModal,
+  HorizontalScrollContainer,
+} from "./components/ui";
+import { triggerConfetti, toast } from "./lib/utils";
+import { DEFAULT_SETTINGS } from "./lib/documentSettings";
 import type {
   DocumentDetail,
   DocumentSettings,
@@ -30,1291 +42,1771 @@ import type {
   ElementEdit,
   SelectionItem,
   TemplateRecord,
-} from './types'
+} from "./types";
 
-import { FloatingInfoPanel } from './components/FloatingInfoPanel'
-import { FloatingPanel, type PanelLayout } from './components/FloatingPanel'
+import { FloatingInfoPanel } from "./components/FloatingInfoPanel";
+import {
+  FloatingPanel,
+  BOTTOM_DOCK_HEIGHT,
+  type PanelLayout,
+} from "./components/FloatingPanel";
+
+function getInitialSidebar(): PanelLayout {
+  try {
+    const saved = localStorage.getItem("hdv-sidebar-layout");
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed && typeof parsed.w === "number") {
+        parsed.w = Math.max(180, parsed.w);
+        parsed.h = Math.max(100, parsed.h);
+        if (typeof parsed.dockColumn !== "number") parsed.dockColumn = 0;
+        if (typeof parsed.dockRow !== "number") parsed.dockRow = 0;
+        return parsed;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return {
+    x: 6,
+    y: 50,
+    w: 220,
+    h: typeof window !== "undefined" ? window.innerHeight - 50 - 32 : 600,
+    isDocked: true,
+    zone: "dock-left",
+    minimized: false,
+    visible: true,
+    dockColumn: 0,
+    dockRow: 0,
+  };
+}
+
+function getInitialInspector(): PanelLayout {
+  try {
+    const saved = localStorage.getItem("hdv-inspector-layout");
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed && typeof parsed.w === "number") {
+        parsed.w = Math.max(240, parsed.w);
+        parsed.h = Math.max(100, parsed.h);
+        if (typeof parsed.dockColumn !== "number") parsed.dockColumn = 0;
+        if (typeof parsed.dockRow !== "number") parsed.dockRow = 0;
+        return parsed;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return {
+    x: typeof window !== "undefined" ? window.innerWidth - 280 - 6 : 800,
+    y: 50,
+    w: 280,
+    h: typeof window !== "undefined" ? window.innerHeight - 50 - 32 : 600,
+    isDocked: true,
+    zone: "dock-right",
+    minimized: false,
+    visible: true,
+    dockColumn: 0,
+    dockRow: 0,
+  };
+}
+
+function getInitialInfoPanel(): PanelLayout {
+  try {
+    const saved = localStorage.getItem("hdv-info-panel-layout");
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed && typeof parsed.w === "number") {
+        parsed.w = Math.max(180, parsed.w);
+        parsed.h = Math.max(100, parsed.h);
+        if (typeof parsed.dockColumn !== "number") parsed.dockColumn = 0;
+        if (typeof parsed.dockRow !== "number") parsed.dockRow = 0;
+        return parsed;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return {
+    x: 300,
+    y: typeof window !== "undefined" ? window.innerHeight - 200 : 500,
+    w: 320,
+    h: 150,
+    isDocked: false,
+    zone: "free",
+    minimized: false,
+    visible: false,
+    dockColumn: 0,
+    dockRow: 0,
+  };
+}
 
 function App() {
-  const frameRef = useRef<DocumentFrameHandle | null>(null)
-  const canvasRef = useRef<HTMLElement | null>(null)
-  const shellRef = useRef<HTMLElement | null>(null)
-  const [fipCopyNotice, setFipCopyNotice] = useState('')
-  const [documents, setDocuments] = useState<DocumentSummary[]>([])
-  const [activeDocument, setActiveDocument] = useState<DocumentDetail | null>(null)
-  const [settings, setSettings] = useState<DocumentSettings>(DEFAULT_SETTINGS)
-  const [settingsDirty, setSettingsDirty] = useState(false)
-  const [selectorEnabled, setSelectorEnabled] = useState(true)
-  const [selectedItems, setSelectedItems] = useState<SelectionItem[]>([])
-  const [pendingEdits, setPendingEdits] = useState<Record<string, ElementEdit>>({})
-  const [templates, setTemplates] = useState<TemplateRecord[]>([])
-  const [templateName, setTemplateName] = useState('')
-  const [inlineTemplateStyles, setInlineTemplateStyles] = useState(true)
-  const [selectedTemplateId, setSelectedTemplateId] = useState('')
-  const [templatePlacement, setTemplatePlacement] = useState('after')
-  const [librarySearch, setLibrarySearch] = useState('')
-  const [renameTemplateName, setRenameTemplateName] = useState('')
-  const [activeInspectorTab, setActiveInspectorTab] = useState<InspectorTab>('selection')
-  const [tokenInput, setTokenInput] = useState(getStoredToken())
-  const [search, setSearch] = useState('')
-  const [status, setStatus] = useState('Loading documents…')
-  const [busy, setBusy] = useState(false)
-  const [reloadToken, setReloadToken] = useState(0)
-  const [activeView, setActiveView] = useState<'editor' | 'library' | 'settings'>('editor')
-  const [isNewDocModalOpen, setIsNewDocModalOpen] = useState(false)
+  const frameRef = useRef<DocumentFrameHandle | null>(null);
+  const canvasRef = useRef<HTMLElement | null>(null);
+  const shellRef = useRef<HTMLElement | null>(null);
+  const [fipCopyNotice, setFipCopyNotice] = useState("");
+  const [documents, setDocuments] = useState<DocumentSummary[]>([]);
+  const [activeDocument, setActiveDocument] = useState<DocumentDetail | null>(
+    null,
+  );
+  const [settings, setSettings] = useState<DocumentSettings>(DEFAULT_SETTINGS);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [selectorEnabled, setSelectorEnabled] = useState(true);
+  const [selectedItems, setSelectedItems] = useState<SelectionItem[]>([]);
+  const [pendingEdits, setPendingEdits] = useState<Record<string, ElementEdit>>(
+    {},
+  );
+  const [templates, setTemplates] = useState<TemplateRecord[]>([]);
+  const [templateName, setTemplateName] = useState("");
+  const [inlineTemplateStyles, setInlineTemplateStyles] = useState(true);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [templatePlacement, setTemplatePlacement] = useState("after");
+  const [librarySearch, setLibrarySearch] = useState("");
+  const [renameTemplateName, setRenameTemplateName] = useState("");
+  const [activeInspectorTab, setActiveInspectorTab] =
+    useState<InspectorTab>("selection");
+  const [tokenInput, setTokenInput] = useState(getStoredToken());
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("Loading documents…");
+  const [busy, setBusy] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [activeView, setActiveView] = useState<
+    "editor" | "library" | "settings"
+  >("editor");
+  const [isNewDocModalOpen, setIsNewDocModalOpen] = useState(false);
 
-  const [sidebarLayout, setSidebarLayout] = useState<PanelLayout>(() => {
-    try {
-      const saved = localStorage.getItem('hdv-sidebar-layout')
-      if (saved) {
-        const parsed = JSON.parse(saved)
-        if (parsed && typeof parsed.w === 'number') {
-          parsed.w = Math.max(180, parsed.w)
-          parsed.h = Math.max(100, parsed.h)
-          if (typeof parsed.dockColumn !== 'number') parsed.dockColumn = 0
-          if (typeof parsed.dockRow !== 'number') parsed.dockRow = 0
-          return parsed
-        }
-      }
-    } catch { /* ignore */ }
-    return {
-      x: 6,
-      y: 50,
-      w: 220,
-      h: window.innerHeight - 50 - 32,
-      isDocked: true,
-      zone: 'dock-left',
-      minimized: false,
-      visible: true,
-      dockColumn: 0,
-      dockRow: 0,
-    }
-  })
+  const [initialLayouts] = useState(() => {
+    const sidebar = getInitialSidebar();
+    const inspector = getInitialInspector();
+    const info = getInitialInfoPanel();
+    return normalizeDockLayouts(sidebar, inspector, info, false);
+  });
 
-  const [inspectorLayout, setInspectorLayout] = useState<PanelLayout>(() => {
-    try {
-      const saved = localStorage.getItem('hdv-inspector-layout')
-      if (saved) {
-        const parsed = JSON.parse(saved)
-        if (parsed && typeof parsed.w === 'number') {
-          parsed.w = Math.max(240, parsed.w)
-          parsed.h = Math.max(100, parsed.h)
-          if (typeof parsed.dockColumn !== 'number') parsed.dockColumn = 0
-          if (typeof parsed.dockRow !== 'number') parsed.dockRow = 0
-          return parsed
-        }
-      }
-    } catch { /* ignore */ }
-    return {
-      x: window.innerWidth - 280 - 6,
-      y: 50,
-      w: 280,
-      h: window.innerHeight - 50 - 32,
-      isDocked: true,
-      zone: 'dock-right',
-      minimized: false,
-      visible: true,
-      dockColumn: 0,
-      dockRow: 0,
-    }
-  })
+  const [sidebarLayout, rawSetSidebarLayout] = useState<PanelLayout>(
+    initialLayouts.sidebar,
+  );
+  const [inspectorLayout, rawSetInspectorLayout] = useState<PanelLayout>(
+    initialLayouts.inspector,
+  );
+  const [infoPanelLayout, rawSetInfoPanelLayout] = useState<PanelLayout>(
+    initialLayouts.info,
+  );
 
   useEffect(() => {
-    localStorage.setItem('hdv-sidebar-layout', JSON.stringify(sidebarLayout))
-  }, [sidebarLayout])
+    localStorage.setItem("hdv-sidebar-layout", JSON.stringify(sidebarLayout));
+  }, [sidebarLayout]);
 
   useEffect(() => {
-    localStorage.setItem('hdv-inspector-layout', JSON.stringify(inspectorLayout))
-  }, [inspectorLayout])
-
-  const [infoPanelLayout, setInfoPanelLayout] = useState<PanelLayout>(() => {
-    try {
-      const saved = localStorage.getItem('hdv-info-panel-layout')
-      if (saved) {
-        const parsed = JSON.parse(saved)
-        if (parsed && typeof parsed.w === 'number') {
-          parsed.w = Math.max(180, parsed.w)
-          parsed.h = Math.max(100, parsed.h)
-          if (typeof parsed.dockColumn !== 'number') parsed.dockColumn = 0
-          if (typeof parsed.dockRow !== 'number') parsed.dockRow = 0
-          return parsed
-        }
-      }
-    } catch { /* ignore */ }
-    return {
-      x: 300,
-      y: window.innerHeight - 200,
-      w: 320,
-      h: 150,
-      isDocked: false,
-      zone: 'free',
-      minimized: false,
-      visible: false,
-      dockColumn: 0,
-      dockRow: 0,
-    }
-  })
+    localStorage.setItem(
+      "hdv-inspector-layout",
+      JSON.stringify(inspectorLayout),
+    );
+  }, [inspectorLayout]);
 
   useEffect(() => {
-    localStorage.setItem('hdv-info-panel-layout', JSON.stringify(infoPanelLayout))
-  }, [infoPanelLayout])
+    localStorage.setItem(
+      "hdv-info-panel-layout",
+      JSON.stringify(infoPanelLayout),
+    );
+  }, [infoPanelLayout]);
 
   const getPanelLayout = (panelId: string): PanelLayout => {
-    if (panelId === 'sidebar') return sidebarLayout
-    if (panelId === 'inspector') return inspectorLayout
-    return infoPanelLayout
-  }
+    if (panelId === "sidebar") return sidebarLayout;
+    if (panelId === "inspector") return inspectorLayout;
+    return infoPanelLayout;
+  };
+
+  const adjustLayoutForAppearance = useCallback(
+    (
+      panelId: string,
+      next: PanelLayout,
+      currentSidebar: PanelLayout,
+      currentInspector: PanelLayout,
+      currentInfo: PanelLayout,
+    ): PanelLayout => {
+      if (next.visible && next.isDocked && next.zone !== "free") {
+        const otherDockedVisible = [
+          { id: "sidebar", layout: currentSidebar },
+          { id: "inspector", layout: currentInspector },
+          { id: "info-panel", layout: currentInfo },
+        ].filter(
+          (p) =>
+            p.id !== panelId &&
+            p.layout.isDocked &&
+            p.layout.zone === next.zone &&
+            p.layout.visible &&
+            (p.id !== "info-panel" || selectedItems.length > 0),
+        );
+
+        if (otherDockedVisible.length > 0) {
+          return {
+            ...next,
+            isDocked: false,
+            zone: "free",
+            x: next.restoreX ?? Math.max(6, (window.innerWidth - next.w) / 2),
+            y: next.restoreY ?? Math.max(42, (window.innerHeight - next.h) / 2),
+            w: next.restoreW ?? next.w,
+            h: next.restoreH ?? next.h,
+          };
+        }
+      }
+      return next;
+    },
+    [selectedItems.length],
+  );
+
+  const setSidebarLayout = useCallback(
+    (value: PanelLayout | ((prev: PanelLayout) => PanelLayout)) => {
+      rawSetSidebarLayout((prev) => {
+        const next = typeof value === "function" ? value(prev) : value;
+        if (next.visible && !prev.visible) {
+          return adjustLayoutForAppearance(
+            "sidebar",
+            next,
+            prev,
+            inspectorLayout,
+            infoPanelLayout,
+          );
+        }
+        return next;
+      });
+    },
+    [inspectorLayout, infoPanelLayout, adjustLayoutForAppearance],
+  );
+
+  const setInspectorLayout = useCallback(
+    (value: PanelLayout | ((prev: PanelLayout) => PanelLayout)) => {
+      rawSetInspectorLayout((prev) => {
+        const next = typeof value === "function" ? value(prev) : value;
+        if (next.visible && !prev.visible) {
+          return adjustLayoutForAppearance(
+            "inspector",
+            next,
+            sidebarLayout,
+            prev,
+            infoPanelLayout,
+          );
+        }
+        return next;
+      });
+    },
+    [sidebarLayout, infoPanelLayout, adjustLayoutForAppearance],
+  );
+
+  const setInfoPanelLayout = useCallback(
+    (value: PanelLayout | ((prev: PanelLayout) => PanelLayout)) => {
+      rawSetInfoPanelLayout((prev) => {
+        const next = typeof value === "function" ? value(prev) : value;
+        if (next.visible && !prev.visible) {
+          return adjustLayoutForAppearance(
+            "info-panel",
+            next,
+            sidebarLayout,
+            inspectorLayout,
+            prev,
+          );
+        }
+        return next;
+      });
+    },
+    [sidebarLayout, inspectorLayout, adjustLayoutForAppearance],
+  );
+
+  const bottomDockedPanels = useMemo(() => {
+    return [
+      { id: "sidebar", layout: sidebarLayout },
+      { id: "inspector", layout: inspectorLayout },
+      { id: "info-panel", layout: infoPanelLayout },
+    ].filter(
+      (panel) =>
+        panel.layout.isDocked &&
+        panel.layout.visible &&
+        panel.layout.zone === "dock-bottom" &&
+        (panel.id !== "info-panel" || selectedItems.length > 0),
+    );
+  }, [sidebarLayout, inspectorLayout, infoPanelLayout, selectedItems.length]);
+
+  const bottomDockHeight = useMemo(() => {
+    if (bottomDockedPanels.length === 0) return 0;
+    return Math.max(
+      ...bottomDockedPanels.map((panel) =>
+        panel.layout.minimized ? 32 : panel.layout.h,
+      ),
+    );
+  }, [bottomDockedPanels]);
+
+  const bottomDockOccupantId = bottomDockedPanels[0]?.id ?? null;
 
   const getPanelStackFlags = (panelId: string) => {
-    const layout = getPanelLayout(panelId)
+    const layout = getPanelLayout(panelId);
     if (!layout.isDocked || !layout.visible) {
-      return { isOnlyInColumn: true, isLastInColumn: false }
+      return { isOnlyInColumn: true, isLastInColumn: false };
     }
-    
-    const zone = layout.zone
-    const col = layout.dockColumn
+
+    const zone = layout.zone;
+    const col = layout.dockColumn;
     const colPanels = [
-      { id: 'sidebar', layout: sidebarLayout },
-      { id: 'inspector', layout: inspectorLayout },
-      { id: 'info-panel', layout: infoPanelLayout },
-    ].filter(p => p.layout.isDocked && p.layout.zone === zone && p.layout.dockColumn === col && p.layout.visible && (p.id !== 'info-panel' || selectedItems.length > 0))
+      { id: "sidebar", layout: sidebarLayout },
+      { id: "inspector", layout: inspectorLayout },
+      { id: "info-panel", layout: infoPanelLayout },
+    ].filter(
+      (p) =>
+        p.layout.isDocked &&
+        p.layout.zone === zone &&
+        p.layout.dockColumn === col &&
+        p.layout.visible &&
+        (p.id !== "info-panel" || selectedItems.length > 0),
+    );
 
-    colPanels.sort((a, b) => (a.layout.dockRow ?? 0) - (b.layout.dockRow ?? 0))
+    colPanels.sort((a, b) => (a.layout.dockRow ?? 0) - (b.layout.dockRow ?? 0));
 
-    const isOnly = colPanels.length === 1
-    const idx = colPanels.findIndex(p => p.id === panelId)
-    const isLast = idx === colPanels.length - 1
+    const isOnly = colPanels.length === 1;
+    const idx = colPanels.findIndex((p) => p.id === panelId);
+    const isLast = idx === colPanels.length - 1;
 
-    return { isOnlyInColumn: isOnly, isLastInColumn: isLast }
-  }
+    return { isOnlyInColumn: isOnly, isLastInColumn: isLast };
+  };
 
-  const applyLayoutUpdates = (updates: Record<string, Partial<PanelLayout>>) => {
-    const nextSidebar = { ...sidebarLayout, ...(updates.sidebar || updates['sidebar']) }
-    const nextInspector = { ...inspectorLayout, ...(updates.inspector || updates['inspector']) }
-    const nextInfoPanel = { ...infoPanelLayout, ...(updates.info || updates['info-panel']) }
+  const applyLayoutUpdates = (
+    updates: Record<string, Partial<PanelLayout>>,
+  ) => {
+    const nextSidebar = {
+      ...sidebarLayout,
+      ...(updates.sidebar || updates["sidebar"]),
+    };
+    const nextInspector = {
+      ...inspectorLayout,
+      ...(updates.inspector || updates["inspector"]),
+    };
+    const nextInfoPanel = {
+      ...infoPanelLayout,
+      ...(updates.info || updates["info-panel"]),
+    };
 
-    const normalized = normalizeDockLayouts(nextSidebar, nextInspector, nextInfoPanel)
+    const normalized = normalizeDockLayouts(
+      nextSidebar,
+      nextInspector,
+      nextInfoPanel,
+      selectedItems.length > 0,
+    );
 
-    setSidebarLayout(normalized.sidebar)
-    setInspectorLayout(normalized.inspector)
-    setInfoPanelLayout(normalized.info)
-  }
+    setSidebarLayout(normalized.sidebar);
+    setInspectorLayout(normalized.inspector);
+    setInfoPanelLayout(normalized.info);
+  };
 
   const handlePanelLayoutChange = (id: string, nextLayout: PanelLayout) => {
     if (nextLayout.isDocked) {
-      const zone = nextLayout.zone
-      const col = nextLayout.dockColumn
-      
+      const zone = nextLayout.zone;
+      const col = nextLayout.dockColumn;
+
       const updates: Record<string, Partial<PanelLayout>> = {
-        [id]: nextLayout
+        [id]: nextLayout,
+      };
+
+      if (
+        zone === "dock-bottom" &&
+        bottomDockOccupantId &&
+        bottomDockOccupantId !== id
+      ) {
+        applyLayoutUpdates({
+          [id]: {
+            ...nextLayout,
+            isDocked: false,
+            zone: "free",
+          },
+        });
+        return;
       }
 
-      if (zone === 'dock-left' || zone === 'dock-right') {
+      if (zone === "dock-left" || zone === "dock-right") {
         // Find panels in the same column
         const colPanels = [
-          { id: 'sidebar', layout: sidebarLayout },
-          { id: 'inspector', layout: inspectorLayout },
-          { id: 'info-panel', layout: infoPanelLayout },
-        ].filter(p => p.layout.isDocked && p.layout.zone === zone && p.layout.dockColumn === col && p.layout.visible && (p.id !== 'info-panel' || selectedItems.length > 0))
+          { id: "sidebar", layout: sidebarLayout },
+          { id: "inspector", layout: inspectorLayout },
+          { id: "info-panel", layout: infoPanelLayout },
+        ].filter(
+          (p) =>
+            p.layout.isDocked &&
+            p.layout.zone === zone &&
+            p.layout.dockColumn === col &&
+            p.layout.visible &&
+            (p.id !== "info-panel" || selectedItems.length > 0),
+        );
 
         // Sort by dockRow
-        colPanels.sort((a, b) => (a.layout.dockRow ?? 0) - (b.layout.dockRow ?? 0))
+        colPanels.sort(
+          (a, b) => (a.layout.dockRow ?? 0) - (b.layout.dockRow ?? 0),
+        );
 
         // Find index of the panel being resized
-        const idx = colPanels.findIndex(p => p.id === id)
-        
+        const idx = colPanels.findIndex((p) => p.id === id);
+
         // If it is not the last panel, we resize it against the panel below it
         if (idx !== -1 && idx < colPanels.length - 1) {
-          const currentPanel = colPanels[idx]
-          const nextPanel = colPanels[idx + 1]
-          
-          const currentLayout = currentPanel.layout
-          const nextLayoutObj = getPanelLayout(nextPanel.id)
+          const currentPanel = colPanels[idx];
+          const nextPanel = colPanels[idx + 1];
 
-          const minHeightCurrent = currentPanel.id === 'sidebar' ? 120 : (currentPanel.id === 'inspector' ? 120 : 120)
-          const minHeightNext = nextPanel.id === 'sidebar' ? 120 : (nextPanel.id === 'inspector' ? 120 : 120)
+          const currentLayout = currentPanel.layout;
+          const nextLayoutObj = getPanelLayout(nextPanel.id);
 
-          let requestedH = Math.max(minHeightCurrent, nextLayout.h)
-          let diff = requestedH - currentLayout.h
+          const minHeightCurrent =
+            currentPanel.id === "sidebar"
+              ? 120
+              : currentPanel.id === "inspector"
+                ? 120
+                : 120;
+          const minHeightNext =
+            nextPanel.id === "sidebar"
+              ? 120
+              : nextPanel.id === "inspector"
+                ? 120
+                : 120;
 
-          let newNextH = nextLayoutObj.h - diff
+          let requestedH = Math.max(minHeightCurrent, nextLayout.h);
+          let diff = requestedH - currentLayout.h;
+
+          let newNextH = nextLayoutObj.h - diff;
           if (newNextH < minHeightNext) {
-            newNextH = minHeightNext
-            diff = nextLayoutObj.h - minHeightNext
-            requestedH = currentLayout.h + diff
+            newNextH = minHeightNext;
+            diff = nextLayoutObj.h - minHeightNext;
+            requestedH = currentLayout.h + diff;
           }
 
-          updates[id] = { ...nextLayout, h: requestedH }
-          updates[nextPanel.id] = { ...nextLayoutObj, h: newNextH }
+          updates[id] = { ...nextLayout, h: requestedH };
+          updates[nextPanel.id] = { ...nextLayoutObj, h: newNextH };
+        }
+
+        // Horizontal column-to-column resizing: resize against the adjacent column complementarily
+        const currentLayout = getPanelLayout(id);
+        const diffW = nextLayout.w - currentLayout.w;
+
+        if (diffW !== 0) {
+          const targetCol = zone === "dock-left" ? col + 1 : col - 1;
+          const adjacentPanels = [
+            { id: "sidebar", layout: sidebarLayout },
+            { id: "inspector", layout: inspectorLayout },
+            { id: "info-panel", layout: infoPanelLayout },
+          ].filter(
+            (p) =>
+              p.layout.isDocked &&
+              p.layout.zone === zone &&
+              p.layout.dockColumn === targetCol &&
+              p.layout.visible &&
+              (p.id !== "info-panel" || selectedItems.length > 0),
+          );
+
+          if (adjacentPanels.length > 0) {
+            const adjacentW = adjacentPanels[0].layout.w;
+            const minAdjacentW = Math.max(
+              ...adjacentPanels.map((p) =>
+                p.id === "sidebar" ? 180 : p.id === "inspector" ? 240 : 220,
+              ),
+            );
+            const minCurrentW =
+              id === "sidebar" ? 180 : id === "inspector" ? 240 : 220;
+
+            let requestedW = Math.max(minCurrentW, nextLayout.w);
+            let actualDiff = requestedW - currentLayout.w;
+            let newAdjacentW = adjacentW - actualDiff;
+
+            if (newAdjacentW < minAdjacentW) {
+              newAdjacentW = minAdjacentW;
+              actualDiff = adjacentW - minAdjacentW;
+              requestedW = currentLayout.w + actualDiff;
+            }
+
+            nextLayout.w = requestedW;
+            updates[id] = { ...nextLayout };
+
+            adjacentPanels.forEach((ap) => {
+              const apLayout = getPanelLayout(ap.id);
+              updates[ap.id] = {
+                ...updates[ap.id],
+                ...apLayout,
+                w: newAdjacentW,
+              };
+            });
+          }
         }
 
         // Also synchronize the width across all panels in this column
-        const otherPanelIds = ['sidebar', 'inspector', 'info-panel'].filter(pId => pId !== id)
+        const otherPanelIds = ["sidebar", "inspector", "info-panel"].filter(
+          (pId) => pId !== id,
+        );
         for (const pId of otherPanelIds) {
-          const l = getPanelLayout(pId)
+          const l = getPanelLayout(pId);
           if (l.isDocked && l.zone === zone && l.dockColumn === col) {
             updates[pId] = {
               ...updates[pId],
               ...l,
-              w: nextLayout.w
-            }
+              w: nextLayout.w,
+            };
           }
         }
       }
-      
-      if (zone === 'dock-bottom') {
+
+      if (zone === "dock-bottom") {
         // Find panels in the same row
         const rowPanels = [
-          { id: 'sidebar', layout: sidebarLayout },
-          { id: 'inspector', layout: inspectorLayout },
-          { id: 'info-panel', layout: infoPanelLayout },
-        ].filter(p => p.layout.isDocked && p.layout.zone === zone && p.layout.visible && (p.id !== 'info-panel' || selectedItems.length > 0))
+          { id: "sidebar", layout: sidebarLayout },
+          { id: "inspector", layout: inspectorLayout },
+          { id: "info-panel", layout: infoPanelLayout },
+        ].filter(
+          (p) =>
+            p.layout.isDocked &&
+            p.layout.zone === zone &&
+            p.layout.visible &&
+            (p.id !== "info-panel" || selectedItems.length > 0),
+        );
 
         // Sort by dockColumn
-        rowPanels.sort((a, b) => (a.layout.dockColumn ?? 0) - (b.layout.dockColumn ?? 0))
+        rowPanels.sort(
+          (a, b) => (a.layout.dockColumn ?? 0) - (b.layout.dockColumn ?? 0),
+        );
 
         // Find index of the panel being resized
-        const idx = rowPanels.findIndex(p => p.id === id)
-        
+        const idx = rowPanels.findIndex((p) => p.id === id);
+
         // If it is not the last panel, we resize it against the panel to its right
         if (idx !== -1 && idx < rowPanels.length - 1) {
-          const currentPanel = rowPanels[idx]
-          const nextPanel = rowPanels[idx + 1]
-          
-          const currentLayout = currentPanel.layout
-          const nextLayoutObj = getPanelLayout(nextPanel.id)
+          const currentPanel = rowPanels[idx];
+          const nextPanel = rowPanels[idx + 1];
 
-          const minWidthCurrent = currentPanel.id === 'sidebar' ? 180 : (currentPanel.id === 'inspector' ? 240 : 220)
-          const minWidthNext = nextPanel.id === 'sidebar' ? 180 : (nextPanel.id === 'inspector' ? 240 : 220)
+          const currentLayout = currentPanel.layout;
+          const nextLayoutObj = getPanelLayout(nextPanel.id);
 
-          let requestedW = Math.max(minWidthCurrent, nextLayout.w)
-          let diff = requestedW - currentLayout.w
+          const minWidthCurrent =
+            currentPanel.id === "sidebar"
+              ? 180
+              : currentPanel.id === "inspector"
+                ? 240
+                : 220;
+          const minWidthNext =
+            nextPanel.id === "sidebar"
+              ? 180
+              : nextPanel.id === "inspector"
+                ? 240
+                : 220;
 
-          let newNextW = nextLayoutObj.w - diff
+          let requestedW = Math.max(minWidthCurrent, nextLayout.w);
+          let diff = requestedW - currentLayout.w;
+
+          let newNextW = nextLayoutObj.w - diff;
           if (newNextW < minWidthNext) {
-            newNextW = minWidthNext
-            diff = nextLayoutObj.w - minWidthNext
-            requestedW = currentLayout.w + diff
+            newNextW = minWidthNext;
+            diff = nextLayoutObj.w - minWidthNext;
+            requestedW = currentLayout.w + diff;
           }
 
-          updates[id] = { ...nextLayout, w: requestedW }
-          updates[nextPanel.id] = { ...nextLayoutObj, w: newNextW }
+          updates[id] = { ...nextLayout, w: requestedW };
+          updates[nextPanel.id] = { ...nextLayoutObj, w: newNextW };
         }
 
         // Also synchronize the height across all panels in this row
-        const otherPanelIds = ['sidebar', 'inspector', 'info-panel'].filter(pId => pId !== id)
+        const otherPanelIds = ["sidebar", "inspector", "info-panel"].filter(
+          (pId) => pId !== id,
+        );
         for (const pId of otherPanelIds) {
-          const l = getPanelLayout(pId)
-          if (l.isDocked && l.zone === zone && l.dockRow === nextLayout.dockRow) {
+          const l = getPanelLayout(pId);
+          if (
+            l.isDocked &&
+            l.zone === zone &&
+            l.dockRow === nextLayout.dockRow
+          ) {
             updates[pId] = {
               ...updates[pId],
               ...l,
-              h: nextLayout.h
-            }
+              h: nextLayout.h,
+            };
           }
         }
       }
 
-      applyLayoutUpdates(updates)
+      applyLayoutUpdates(updates);
     } else {
-      applyLayoutUpdates({ [id]: nextLayout })
+      applyLayoutUpdates({ [id]: nextLayout });
     }
-  }
+  };
 
   const leftDockWidth = useMemo(() => {
-    const cols = new Set<number>()
-    let totalW = 0
-    
-    if (sidebarLayout.isDocked && sidebarLayout.visible && sidebarLayout.zone === 'dock-left') {
-      cols.add(sidebarLayout.dockColumn)
+    const cols = new Set<number>();
+    let totalW = 0;
+
+    if (
+      sidebarLayout.isDocked &&
+      sidebarLayout.visible &&
+      sidebarLayout.zone === "dock-left"
+    ) {
+      cols.add(sidebarLayout.dockColumn);
     }
-    if (inspectorLayout.isDocked && inspectorLayout.visible && inspectorLayout.zone === 'dock-left') {
-      cols.add(inspectorLayout.dockColumn)
+    if (
+      inspectorLayout.isDocked &&
+      inspectorLayout.visible &&
+      inspectorLayout.zone === "dock-left"
+    ) {
+      cols.add(inspectorLayout.dockColumn);
     }
-    if (infoPanelLayout.isDocked && infoPanelLayout.visible && selectedItems.length > 0 && infoPanelLayout.zone === 'dock-left') {
-      cols.add(infoPanelLayout.dockColumn)
+    if (
+      infoPanelLayout.isDocked &&
+      infoPanelLayout.visible &&
+      selectedItems.length > 0 &&
+      infoPanelLayout.zone === "dock-left"
+    ) {
+      cols.add(infoPanelLayout.dockColumn);
     }
 
-    cols.forEach(col => {
-      let colW = 0
-      if (sidebarLayout.isDocked && sidebarLayout.visible && sidebarLayout.zone === 'dock-left' && sidebarLayout.dockColumn === col) {
-        colW = Math.max(colW, sidebarLayout.w)
+    cols.forEach((col) => {
+      let colW = 0;
+      if (
+        sidebarLayout.isDocked &&
+        sidebarLayout.visible &&
+        sidebarLayout.zone === "dock-left" &&
+        sidebarLayout.dockColumn === col
+      ) {
+        colW = Math.max(colW, sidebarLayout.w);
       }
-      if (inspectorLayout.isDocked && inspectorLayout.visible && inspectorLayout.zone === 'dock-left' && inspectorLayout.dockColumn === col) {
-        colW = Math.max(colW, inspectorLayout.w)
+      if (
+        inspectorLayout.isDocked &&
+        inspectorLayout.visible &&
+        inspectorLayout.zone === "dock-left" &&
+        inspectorLayout.dockColumn === col
+      ) {
+        colW = Math.max(colW, inspectorLayout.w);
       }
-      if (infoPanelLayout.isDocked && infoPanelLayout.visible && selectedItems.length > 0 && infoPanelLayout.zone === 'dock-left' && infoPanelLayout.dockColumn === col) {
-        colW = Math.max(colW, infoPanelLayout.w)
+      if (
+        infoPanelLayout.isDocked &&
+        infoPanelLayout.visible &&
+        selectedItems.length > 0 &&
+        infoPanelLayout.zone === "dock-left" &&
+        infoPanelLayout.dockColumn === col
+      ) {
+        colW = Math.max(colW, infoPanelLayout.w);
       }
-      totalW += colW
-    })
-    
-    return totalW
-  }, [sidebarLayout, inspectorLayout, infoPanelLayout, selectedItems])
+      totalW += colW;
+    });
+
+    return totalW;
+  }, [sidebarLayout, inspectorLayout, infoPanelLayout, selectedItems]);
 
   const rightDockWidth = useMemo(() => {
-    const cols = new Set<number>()
-    let totalW = 0
-    
-    if (sidebarLayout.isDocked && sidebarLayout.visible && sidebarLayout.zone === 'dock-right') {
-      cols.add(sidebarLayout.dockColumn)
+    const cols = new Set<number>();
+    let totalW = 0;
+
+    if (
+      sidebarLayout.isDocked &&
+      sidebarLayout.visible &&
+      sidebarLayout.zone === "dock-right"
+    ) {
+      cols.add(sidebarLayout.dockColumn);
     }
-    if (inspectorLayout.isDocked && inspectorLayout.visible && inspectorLayout.zone === 'dock-right') {
-      cols.add(inspectorLayout.dockColumn)
+    if (
+      inspectorLayout.isDocked &&
+      inspectorLayout.visible &&
+      inspectorLayout.zone === "dock-right"
+    ) {
+      cols.add(inspectorLayout.dockColumn);
     }
-    if (infoPanelLayout.isDocked && infoPanelLayout.visible && selectedItems.length > 0 && infoPanelLayout.zone === 'dock-right') {
-      cols.add(infoPanelLayout.dockColumn)
+    if (
+      infoPanelLayout.isDocked &&
+      infoPanelLayout.visible &&
+      selectedItems.length > 0 &&
+      infoPanelLayout.zone === "dock-right"
+    ) {
+      cols.add(infoPanelLayout.dockColumn);
     }
 
-    cols.forEach(col => {
-      let colW = 0
-      if (sidebarLayout.isDocked && sidebarLayout.visible && sidebarLayout.zone === 'dock-right' && sidebarLayout.dockColumn === col) {
-        colW = Math.max(colW, sidebarLayout.w)
+    cols.forEach((col) => {
+      let colW = 0;
+      if (
+        sidebarLayout.isDocked &&
+        sidebarLayout.visible &&
+        sidebarLayout.zone === "dock-right" &&
+        sidebarLayout.dockColumn === col
+      ) {
+        colW = Math.max(colW, sidebarLayout.w);
       }
-      if (inspectorLayout.isDocked && inspectorLayout.visible && inspectorLayout.zone === 'dock-right' && inspectorLayout.dockColumn === col) {
-        colW = Math.max(colW, inspectorLayout.w)
+      if (
+        inspectorLayout.isDocked &&
+        inspectorLayout.visible &&
+        inspectorLayout.zone === "dock-right" &&
+        inspectorLayout.dockColumn === col
+      ) {
+        colW = Math.max(colW, inspectorLayout.w);
       }
-      if (infoPanelLayout.isDocked && infoPanelLayout.visible && selectedItems.length > 0 && infoPanelLayout.zone === 'dock-right' && infoPanelLayout.dockColumn === col) {
-        colW = Math.max(colW, infoPanelLayout.w)
+      if (
+        infoPanelLayout.isDocked &&
+        infoPanelLayout.visible &&
+        selectedItems.length > 0 &&
+        infoPanelLayout.zone === "dock-right" &&
+        infoPanelLayout.dockColumn === col
+      ) {
+        colW = Math.max(colW, infoPanelLayout.w);
       }
-      totalW += colW
-    })
-    
-    return totalW
-  }, [sidebarLayout, inspectorLayout, infoPanelLayout, selectedItems])
+      totalW += colW;
+    });
 
+    return totalW;
+  }, [sidebarLayout, inspectorLayout, infoPanelLayout, selectedItems]);
 
   const [destinationsExpanded, setDestinationsExpanded] = useState(() => {
-    const v = localStorage.getItem('hdv-acc-destinations')
-    return v === null ? true : v === 'true'
-  })
+    const v = localStorage.getItem("hdv-acc-destinations");
+    return v === null ? true : v === "true";
+  });
   const [documentsExpanded, setDocumentsExpanded] = useState(() => {
-    const v = localStorage.getItem('hdv-acc-documents')
-    return v === null ? true : v === 'true'
-  })
-  const [footerVisible, setFooterVisible] = useState(true)
-  const [topbarMaximized, setTopbarMaximized] = useState(false)
-  const [saveBtnFlash, setSaveBtnFlash] = useState(false)
+    const v = localStorage.getItem("hdv-acc-documents");
+    return v === null ? true : v === "true";
+  });
+  const [footerVisible, setFooterVisible] = useState(true);
+  const [topbarMaximized, setTopbarMaximized] = useState(false);
+  const [saveBtnFlash, setSaveBtnFlash] = useState(false);
 
   useEffect(() => {
     const showTimer = setTimeout(() => {
-      setFooterVisible(true)
-    }, 0)
+      setFooterVisible(true);
+    }, 0);
     const hideTimer = setTimeout(() => {
-      setFooterVisible(false)
-    }, 3000)
+      setFooterVisible(false);
+    }, 3000);
     return () => {
-      clearTimeout(showTimer)
-      clearTimeout(hideTimer)
-    }
-  }, [status])
+      clearTimeout(showTimer);
+      clearTimeout(hideTimer);
+    };
+  }, [status]);
 
-  const [accent, setAccent] = useState<'blue' | 'purple' | 'teal' | 'orange' | 'rose'>(() => {
-    return (localStorage.getItem('hdv-accent') as 'blue' | 'purple' | 'teal' | 'orange' | 'rose') || 'blue'
-  })
-  const [theme, setTheme] = useState<'system' | 'dark' | 'light' | 'true-black'>(() => {
-    return (localStorage.getItem('hdv-theme') as 'system' | 'dark' | 'light' | 'true-black') || 'system'
-  })
-  const [showCommandPalette, setShowCommandPalette] = useState(false)
-  const [commandSearch, setCommandSearch] = useState('')
-  const [paletteIndex, setPaletteIndex] = useState(0)
+  const [accent, setAccent] = useState<
+    "blue" | "purple" | "teal" | "orange" | "rose"
+  >(() => {
+    return (
+      (localStorage.getItem("hdv-accent") as
+        | "blue"
+        | "purple"
+        | "teal"
+        | "orange"
+        | "rose") || "blue"
+    );
+  });
+  const [theme, setTheme] = useState<
+    "system" | "dark" | "light" | "true-black"
+  >(() => {
+    return (
+      (localStorage.getItem("hdv-theme") as
+        | "system"
+        | "dark"
+        | "light"
+        | "true-black") || "system"
+    );
+  });
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [commandSearch, setCommandSearch] = useState("");
+  const [paletteIndex, setPaletteIndex] = useState(0);
   const [startupActive, setStartupActive] = useState(() => {
-    return typeof navigator !== 'undefined' && navigator.webdriver ? false : true
-  })
-  const [activeMenu, setActiveMenu] = useState<string | null>(null)
-  const [menuCoords, setMenuCoords] = useState({ x: 0, y: 0 })
-  const [zenMode, setZenMode] = useState(false)
+    return typeof navigator !== "undefined" && navigator.webdriver
+      ? false
+      : true;
+  });
+  const [activeMenu, setActiveMenu] = useState<string | null>(null);
+  const [menuCoords, setMenuCoords] = useState({ x: 0, y: 0 });
+  const [zenMode, setZenMode] = useState(false);
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      setStartupActive(false)
-    }, 2500)
-    return () => clearTimeout(timer)
-  }, [])
+      setStartupActive(false);
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Disable browser right-click menu globally in the main window
   useEffect(() => {
     const handleGlobalContextMenu = (e: MouseEvent) => {
-      e.preventDefault()
-    }
-    window.addEventListener('contextmenu', handleGlobalContextMenu)
+      e.preventDefault();
+    };
+    window.addEventListener("contextmenu", handleGlobalContextMenu);
     return () => {
-      window.removeEventListener('contextmenu', handleGlobalContextMenu)
-    }
-  }, [])
+      window.removeEventListener("contextmenu", handleGlobalContextMenu);
+    };
+  }, []);
 
   useEffect(() => {
     document.documentElement.classList.remove(
-      'accent-blue', 'accent-purple', 'accent-teal', 'accent-orange', 'accent-rose',
-      'theme-light', 'theme-true-black'
-    )
-    document.documentElement.classList.add(`accent-${accent}`)
-    localStorage.setItem('hdv-accent', accent)
-    
+      "accent-blue",
+      "accent-purple",
+      "accent-teal",
+      "accent-orange",
+      "accent-rose",
+      "theme-light",
+      "theme-true-black",
+    );
+    document.documentElement.classList.add(`accent-${accent}`);
+    localStorage.setItem("hdv-accent", accent);
+
     const applyTheme = (t: string) => {
-      document.documentElement.classList.remove('theme-light', 'theme-true-black')
-      if (t === 'light') {
-        document.documentElement.classList.add('theme-light')
-      } else if (t === 'true-black') {
-        document.documentElement.classList.add('theme-true-black')
-      } else if (t === 'system') {
-        const isSystemLight = window.matchMedia('(prefers-color-scheme: light)').matches
+      document.documentElement.classList.remove(
+        "theme-light",
+        "theme-true-black",
+      );
+      if (t === "light") {
+        document.documentElement.classList.add("theme-light");
+      } else if (t === "true-black") {
+        document.documentElement.classList.add("theme-true-black");
+      } else if (t === "system") {
+        const isSystemLight = window.matchMedia(
+          "(prefers-color-scheme: light)",
+        ).matches;
         if (isSystemLight) {
-          document.documentElement.classList.add('theme-light')
+          document.documentElement.classList.add("theme-light");
         }
       }
-    }
-    
-    applyTheme(theme)
-    localStorage.setItem('hdv-theme', theme)
+    };
 
-    if (theme === 'system') {
-      const mediaQuery = window.matchMedia('(prefers-color-scheme: light)')
+    applyTheme(theme);
+    localStorage.setItem("hdv-theme", theme);
+
+    if (theme === "system") {
+      const mediaQuery = window.matchMedia("(prefers-color-scheme: light)");
       const handler = (e: MediaQueryListEvent) => {
-        document.documentElement.classList.remove('theme-light')
+        document.documentElement.classList.remove("theme-light");
         if (e.matches) {
-          document.documentElement.classList.add('theme-light')
+          document.documentElement.classList.add("theme-light");
         }
-      }
-      mediaQuery.addEventListener('change', handler)
-      return () => mediaQuery.removeEventListener('change', handler)
+      };
+      mediaQuery.addEventListener("change", handler);
+      return () => mediaQuery.removeEventListener("change", handler);
     }
-  }, [accent, theme])
+  }, [accent, theme]);
 
-
-
-  const [ancestors, setAncestors] = useState<Array<{ tag: string; path: string; label: string }>>([])
-  const [openDocIds, setOpenDocIds] = useState<string[]>([])
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(null)
+  const [ancestors, setAncestors] = useState<
+    Array<{ tag: string; path: string; label: string }>
+  >([]);
+  const [openDocIds, setOpenDocIds] = useState<string[]>([]);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    items: ContextMenuItem[];
+  } | null>(null);
   const [dialogConfig, setDialogConfig] = useState<{
-    isOpen: boolean
-    title: string
-    message: string
-    type?: 'confirm' | 'alert' | 'prompt'
-    promptPlaceholder?: string
-    confirmText?: string
-    cancelText?: string
-    onConfirm: (val?: string) => void
-    onCancel: () => void
-  } | null>(null)
-
-
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type?: "confirm" | "alert" | "prompt";
+    promptPlaceholder?: string;
+    confirmText?: string;
+    cancelText?: string;
+    onConfirm: (val?: string) => void;
+    onCancel: () => void;
+  } | null>(null);
 
   function closeTab(id: string) {
     setOpenDocIds((prev) => {
-      const next = prev.filter((docId) => docId !== id)
+      const next = prev.filter((docId) => docId !== id);
       if (activeDocument?.id === id) {
         if (next.length > 0) {
-          const nextActiveId = next[next.length - 1]
+          const nextActiveId = next[next.length - 1];
           setTimeout(() => {
-            void openDocument(nextActiveId, { force: true })
-          }, 0)
+            void openDocument(nextActiveId, { force: true });
+          }, 0);
         } else {
-          setActiveDocument(null)
+          setActiveDocument(null);
         }
       }
-      return next
-    })
+      return next;
+    });
   }
 
   function closeDocumentTab(id: string, e: React.MouseEvent) {
-    e.stopPropagation()
-    closeTab(id)
+    e.stopPropagation();
+    closeTab(id);
   }
 
   function handleSelectionChange(items: SelectionItem[]) {
-    setSelectedItems(items)
+    setSelectedItems(items);
     if (items.length > 0) {
-      setActiveInspectorTab('selection')
+      setActiveInspectorTab("selection");
       if (frameRef.current) {
-        setAncestors(frameRef.current.getAncestors(items[0].path))
+        setAncestors(frameRef.current.getAncestors(items[0].path));
       }
-      setInfoPanelLayout((prev) => prev.visible ? prev : { ...prev, visible: true })
+      setInfoPanelLayout((prev) =>
+        prev.visible ? prev : { ...prev, visible: true },
+      );
     } else {
-      setAncestors([])
+      setAncestors([]);
     }
   }
 
   const handleFrameContextMenu = (x: number, y: number, path: string) => {
-    if (path === '__canvas__') {
+    if (path === "__canvas__") {
       const items: ContextMenuItem[] = [
         {
-          label: selectorEnabled ? 'Exit Select Mode' : 'Enter Select Mode',
+          label: selectorEnabled ? "Exit Select Mode" : "Enter Select Mode",
           onClick: () => setSelectorEnabled(!selectorEnabled),
         },
         {
-          label: zenMode ? 'Exit Zen Mode' : 'Enter Zen Mode (⌘.)',
+          label: zenMode ? "Exit Zen Mode" : "Enter Zen Mode (⌘.)",
           onClick: () => setZenMode(!zenMode),
         },
         { divider: true },
         {
-          label: sidebarLayout.visible ? 'Hide Sidebar' : 'Show Sidebar',
-          onClick: () => setSidebarLayout((prev) => ({ ...prev, visible: !prev.visible })),
+          label: sidebarLayout.visible ? "Hide Sidebar" : "Show Sidebar",
+          onClick: () =>
+            setSidebarLayout((prev) => ({ ...prev, visible: !prev.visible })),
         },
         {
-          label: inspectorLayout.visible ? 'Hide Inspector' : 'Show Inspector',
-          onClick: () => setInspectorLayout((prev) => ({ ...prev, visible: !prev.visible })),
+          label: inspectorLayout.visible ? "Hide Inspector" : "Show Inspector",
+          onClick: () =>
+            setInspectorLayout((prev) => ({ ...prev, visible: !prev.visible })),
         },
         { divider: true },
         {
-          label: 'Refresh Preview',
+          label: "Refresh Preview",
           onClick: () => setReloadToken((t) => t + 1),
         },
         { divider: true },
         {
-          label: 'Export HTML',
+          label: "Export HTML",
           onClick: exportHtml,
         },
         {
-          label: 'Export PDF',
+          label: "Export PDF",
           onClick: exportPdf,
         },
-      ]
-      setContextMenu({ x, y, items })
-      return
+      ];
+      setContextMenu({ x, y, items });
+      return;
     }
 
-    const isAlreadySelected = selectedItems.some((item) => item.path === path)
+    const isAlreadySelected = selectedItems.some((item) => item.path === path);
     if (!isAlreadySelected && frameRef.current) {
-      frameRef.current.selectElementByPath(path)
+      frameRef.current.selectElementByPath(path);
     }
 
-    console.log('CONTEXT MENU PATH:', path, 'isAlreadySelected:', isAlreadySelected, 'selectedItems count:', selectedItems.length)
     const menuSelectedItems = isAlreadySelected
       ? selectedItems
-      : [{ path, label: 'Component', agentReference: `HDV_REF file="${activeDocument?.relativePath || ''}" path="${path}"` }]
+      : [
+          {
+            path,
+            label: "Component",
+            agentReference: `HDV_REF file="${activeDocument?.relativePath || ""}" path="${path}"`,
+          },
+        ];
 
-    const parentPath = path.includes('.') ? path.substring(0, path.lastIndexOf('.')) : ''
+    const parentPath = path.includes(".")
+      ? path.substring(0, path.lastIndexOf("."))
+      : "";
     const items: ContextMenuItem[] = [
       {
-        label: 'Select Parent',
+        label: "Select Parent",
         disabled: !parentPath,
         onClick: () => {
           if (frameRef.current && parentPath) {
-            frameRef.current.selectElementByPath(parentPath)
+            frameRef.current.selectElementByPath(parentPath);
           }
         },
       },
       { divider: true },
       {
-        label: menuSelectedItems.length > 1 ? 'Copy References' : 'Copy Reference',
+        label:
+          menuSelectedItems.length > 1 ? "Copy References" : "Copy Reference",
         onClick: () => {
           if (frameRef.current) {
-            const refStr = menuSelectedItems.length > 1
-              ? menuSelectedItems.map((item) => item.agentReference).join('\n')
-              : `HDV_REF file="${activeDocument?.relativePath || ''}" path="${path}"`
-            navigator.clipboard.writeText(refStr)
-            toast(menuSelectedItems.length > 1 ? 'Copied references to clipboard' : 'Copied reference to clipboard', 'success')
+            const refStr =
+              menuSelectedItems.length > 1
+                ? menuSelectedItems
+                    .map((item) => item.agentReference)
+                    .join("\n")
+                : `HDV_REF file="${activeDocument?.relativePath || ""}" path="${path}"`;
+            navigator.clipboard.writeText(refStr);
+            toast(
+              menuSelectedItems.length > 1
+                ? "Copied references to clipboard"
+                : "Copied reference to clipboard",
+              "success",
+            );
           }
         },
       },
       {
-        label: 'Copy Inner HTML',
+        label: "Copy Inner HTML",
         onClick: () => {
           if (frameRef.current) {
-            const html = menuSelectedItems.length > 1
-              ? menuSelectedItems.map((item) => frameRef.current?.getElementInnerHtml(item.path) || '').join('\n')
-              : frameRef.current.getElementInnerHtml(path)
-            navigator.clipboard.writeText(html)
-            toast('Copied inner HTML to clipboard', 'success')
+            const html =
+              menuSelectedItems.length > 1
+                ? menuSelectedItems
+                    .map(
+                      (item) =>
+                        frameRef.current?.getElementInnerHtml(item.path) || "",
+                    )
+                    .join("\n")
+                : frameRef.current.getElementInnerHtml(path);
+            navigator.clipboard.writeText(html);
+            toast("Copied inner HTML to clipboard", "success");
           }
         },
       },
       { divider: true },
       {
-        label: menuSelectedItems.length > 1 ? 'Save as Component (Grouped)...' : 'Save as Component...',
+        label:
+          menuSelectedItems.length > 1
+            ? "Save as Component (Grouped)..."
+            : "Save as Component...",
         disabled: !activeDocument,
         onClick: () => {
-          const defaultName = menuSelectedItems.length > 1 ? 'Grouped Component' : (menuSelectedItems[0]?.label || 'My Component')
+          const defaultName =
+            menuSelectedItems.length > 1
+              ? "Grouped Component"
+              : menuSelectedItems[0]?.label || "My Component";
           setDialogConfig({
             isOpen: true,
-            title: 'Save as Component',
-            message: menuSelectedItems.length > 1
-              ? `Enter a name for the grouped component template containing ${menuSelectedItems.length} elements:`
-              : 'Enter a name for the new component template:',
-            type: 'prompt',
+            title: "Save as Component",
+            message:
+              menuSelectedItems.length > 1
+                ? `Enter a name for the grouped component template containing ${menuSelectedItems.length} elements:`
+                : "Enter a name for the new component template:",
+            type: "prompt",
             promptPlaceholder: defaultName,
-            confirmText: 'Save',
-            cancelText: 'Cancel',
+            confirmText: "Save",
+            cancelText: "Cancel",
             onConfirm: async (name) => {
-              const finalName = name?.trim() || defaultName
-              await runTask('Template saved.', async () => {
-                const html = frameRef.current?.getSelectedHtml(inlineTemplateStyles) || ''
+              const finalName = name?.trim() || defaultName;
+              await runTask("Template saved.", async () => {
+                const html =
+                  frameRef.current?.getSelectedHtml(inlineTemplateStyles) || "";
                 if (!html.trim()) {
-                  throw new Error('No selected HTML was available.')
+                  throw new Error("No selected HTML was available.");
                 }
                 await api.saveTemplate({
                   name: finalName,
                   html,
                   sourceDocumentId: activeDocument!.id,
-                })
-                const response = await api.listTemplates()
-                setTemplates(response.templates)
-                setSelectedTemplateId(response.templates[0]?.id || '')
-                setRenameTemplateName(response.templates[0]?.name || '')
-                return 'Component saved.'
-              })
+                });
+                const response = await api.listTemplates();
+                setTemplates(response.templates);
+                setSelectedTemplateId(response.templates[0]?.id || "");
+                setRenameTemplateName(response.templates[0]?.name || "");
+                return "Component saved.";
+              });
             },
-            onCancel: () => {}
-          })
-        }
+            onCancel: () => {},
+          });
+        },
       },
       { divider: true },
       {
-        label: menuSelectedItems.length > 1 ? 'Delete Elements' : 'Delete Element',
+        label:
+          menuSelectedItems.length > 1 ? "Delete Elements" : "Delete Element",
         onClick: () => {
           if (isAlreadySelected) {
-            handleElementEdit({ styles: { display: 'none' } })
+            handleElementEdit({ styles: { display: "none" } });
           } else {
-            const fullEdit: ElementEdit = { styles: { display: 'none' }, targetPath: path }
-            frameRef.current?.applyElementEdit(fullEdit)
+            const fullEdit: ElementEdit = {
+              styles: { display: "none" },
+              targetPath: path,
+            };
+            frameRef.current?.applyElementEdit(fullEdit);
             setPendingEdits((prev) => ({
               ...prev,
               [path]: mergeEdits(prev[path], fullEdit),
-            }))
+            }));
           }
-          toast(menuSelectedItems.length > 1 ? 'Elements deleted' : 'Element deleted', 'warning')
+          toast(
+            menuSelectedItems.length > 1
+              ? "Elements deleted"
+              : "Element deleted",
+            "warning",
+          );
         },
       },
-    ]
-    setContextMenu({ x, y, items })
-  }
+    ];
+    setContextMenu({ x, y, items });
+  };
 
   const handleCanvasContextMenu = (e: React.MouseEvent) => {
-    if (e.target instanceof HTMLElement && (
-      e.target.classList.contains('canvas-column') ||
-      e.target.classList.contains('canvas-breadcrumbs') ||
-      e.target.classList.contains('empty-canvas') ||
-      e.target.closest('.empty-canvas') ||
-      e.target.closest('.canvas-breadcrumbs')
-    )) {
-      e.preventDefault()
-      handleFrameContextMenu(e.clientX, e.clientY, '__canvas__')
+    if (
+      e.target instanceof HTMLElement &&
+      (e.target.classList.contains("canvas-column") ||
+        e.target.classList.contains("canvas-breadcrumbs") ||
+        e.target.classList.contains("empty-canvas") ||
+        e.target.closest(".empty-canvas") ||
+        e.target.closest(".canvas-breadcrumbs"))
+    ) {
+      e.preventDefault();
+      handleFrameContextMenu(e.clientX, e.clientY, "__canvas__");
     }
-  }
+  };
 
-  const handleDocumentContextMenu = (e: React.MouseEvent, doc: DocumentSummary) => {
-    e.preventDefault()
+  const handleDocumentContextMenu = (
+    e: React.MouseEvent,
+    doc: DocumentSummary,
+  ) => {
+    e.preventDefault();
     const items: ContextMenuItem[] = [
-      { label: 'Open', onClick: () => openDocument(doc.id) },
+      { label: "Open", onClick: () => openDocument(doc.id) },
       {
-        label: 'Open in New Tab',
+        label: "Open in New Tab",
         onClick: () => {
-          setOpenDocIds((prev) => prev.includes(doc.id) ? prev : [...prev, doc.id])
-          void openDocument(doc.id)
+          setOpenDocIds((prev) =>
+            prev.includes(doc.id) ? prev : [...prev, doc.id],
+          );
+          void openDocument(doc.id);
         },
       },
       { divider: true },
       {
-        label: 'Copy Path',
+        label: "Copy Path",
         onClick: () => {
-          navigator.clipboard.writeText(doc.relativePath)
-          toast('Path copied', 'success')
+          navigator.clipboard.writeText(doc.relativePath);
+          toast("Path copied", "success");
         },
       },
-    ]
-    setContextMenu({ x: e.clientX, y: e.clientY, items })
-  }
-
-
+    ];
+    setContextMenu({ x: e.clientX, y: e.clientY, items });
+  };
 
   const handleTabContextMenu = (e: React.MouseEvent, docId: string) => {
-    e.preventDefault()
-    const doc = documents.find((d) => d.id === docId)
-    if (!doc) return
+    e.preventDefault();
+    const doc = documents.find((d) => d.id === docId);
+    if (!doc) return;
     const items: ContextMenuItem[] = [
       {
-        label: 'Close',
+        label: "Close",
         onClick: () => {
-          closeTab(docId)
+          closeTab(docId);
         },
       },
       {
-        label: 'Close Others',
+        label: "Close Others",
         disabled: openDocIds.length <= 1,
         onClick: () => {
-          setOpenDocIds([docId])
+          setOpenDocIds([docId]);
           if (activeDocument?.id !== docId) {
-            void openDocument(docId)
+            void openDocument(docId);
           }
         },
       },
       {
-        label: 'Close All',
+        label: "Close All",
         onClick: () => {
-          setOpenDocIds([])
-          setActiveDocument(null)
+          setOpenDocIds([]);
+          setActiveDocument(null);
         },
       },
       { divider: true },
       {
-        label: 'Copy Path',
+        label: "Copy Path",
         onClick: () => {
-          navigator.clipboard.writeText(doc.relativePath)
-          toast('Path copied', 'success')
+          navigator.clipboard.writeText(doc.relativePath);
+          toast("Path copied", "success");
         },
       },
-    ]
-    setContextMenu({ x: e.clientX, y: e.clientY, items })
-  }
+    ];
+    setContextMenu({ x: e.clientX, y: e.clientY, items });
+  };
 
   const handleSidebarContextMenu = (e: React.MouseEvent) => {
-    if (e.target instanceof HTMLElement && (
-      e.target.classList.contains('sidebar') ||
-      e.target.classList.contains('sidebar-section-content') ||
-      e.target.tagName.toLowerCase() === 'aside'
-    )) {
-      e.preventDefault()
+    if (
+      e.target instanceof HTMLElement &&
+      (e.target.classList.contains("sidebar") ||
+        e.target.classList.contains("sidebar-section-content") ||
+        e.target.tagName.toLowerCase() === "aside")
+    ) {
+      e.preventDefault();
       const items: ContextMenuItem[] = [
         {
-          label: 'Refresh Documents',
+          label: "Refresh Documents",
           onClick: () => {
-            void refreshDocuments()
-            toast('Refreshed document list', 'success')
+            void refreshDocuments();
+            toast("Refreshed document list", "success");
           },
         },
         {
-          label: 'Preferences',
-          onClick: () => setActiveView('settings'),
+          label: "Preferences",
+          onClick: () => setActiveView("settings"),
         },
         { divider: true },
         {
-          label: 'New Document',
+          label: "New Document",
           onClick: () => setIsNewDocModalOpen(true),
         },
-      ]
-      setContextMenu({ x: e.clientX, y: e.clientY, items })
+      ];
+      setContextMenu({ x: e.clientX, y: e.clientY, items });
     }
-  }
+  };
 
-  const handleTemplateContextMenu = (e: React.MouseEvent, template: TemplateRecord) => {
-    e.preventDefault()
+  const handleTemplateContextMenu = (
+    e: React.MouseEvent,
+    template: TemplateRecord,
+  ) => {
+    e.preventDefault();
     const items: ContextMenuItem[] = [
       {
-        label: 'Insert Into Active Document',
+        label: "Insert Into Active Document",
         disabled: !activeDocument,
         onClick: () => {
-          setSelectedTemplateId(template.id)
+          setSelectedTemplateId(template.id);
           setTimeout(() => {
-            void insertTemplate()
-          }, 50)
+            void insertTemplate();
+          }, 50);
         },
       },
       { divider: true },
       {
-        label: 'Delete Snippet',
+        label: "Delete Snippet",
         onClick: () => {
-          setSelectedTemplateId(template.id)
+          setSelectedTemplateId(template.id);
           setTimeout(() => {
-            void deleteTemplate()
-          }, 50)
+            void deleteTemplate();
+          }, 50);
         },
       },
-    ]
-    setContextMenu({ x: e.clientX, y: e.clientY, items })
-  }
+    ];
+    setContextMenu({ x: e.clientX, y: e.clientY, items });
+  };
 
   const filteredDocuments = useMemo(() => {
-    const query = search.trim().toLowerCase()
+    const query = search.trim().toLowerCase();
     if (!query) {
-      return documents
+      return documents;
     }
-    return documents.filter((document) => document.relativePath.toLowerCase().includes(query))
-  }, [documents, search])
+    return documents.filter((document) =>
+      document.relativePath.toLowerCase().includes(query),
+    );
+  }, [documents, search]);
 
   const filteredTemplates = useMemo(() => {
-    const query = librarySearch.trim().toLowerCase()
+    const query = librarySearch.trim().toLowerCase();
     if (!query) {
-      return templates
+      return templates;
     }
     return templates.filter((template) => {
       return (
         template.name.toLowerCase().includes(query) ||
         template.previewText.toLowerCase().includes(query) ||
         template.sourceDocumentPath?.toLowerCase().includes(query)
-      )
-    })
-  }, [templates, librarySearch])
+      );
+    });
+  }, [templates, librarySearch]);
 
-  const pendingCount = Object.keys(pendingEdits).length
-  const hasUnsavedChanges = pendingCount > 0 || settingsDirty
-  const activeTemplate = templates.find((template) => template.id === selectedTemplateId)
+  const pendingCount = Object.keys(pendingEdits).length;
+  const hasUnsavedChanges = pendingCount > 0 || settingsDirty;
+  const activeTemplate = templates.find(
+    (template) => template.id === selectedTemplateId,
+  );
 
-  async function runTask(successMessage: string, task: () => Promise<string | void>) {
-    setBusy(true)
+  async function runTask(
+    successMessage: string,
+    task: () => Promise<string | void>,
+  ) {
+    setBusy(true);
     try {
-      const detailedMessage = await task()
-      setStatus(detailedMessage || successMessage)
+      const detailedMessage = await task();
+      setStatus(detailedMessage || successMessage);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Unexpected error.')
+      setStatus(error instanceof Error ? error.message : "Unexpected error.");
     } finally {
-      setBusy(false)
+      setBusy(false);
     }
   }
 
-
-
   async function openDocument(id: string, options: { force?: boolean } = {}) {
     if (hasUnsavedChanges && !options.force) {
-      setStatus('Save or discard changes before switching documents.')
-      return
+      setStatus("Save or discard changes before switching documents.");
+      return;
     }
-    await runTask('Document opened.', async () => {
-      const detail = await api.getDocument(id)
-      setActiveDocument(detail)
-      setOpenDocIds((prev) => prev.includes(id) ? prev : [...prev, id])
-      setSettings(detail.settings)
-      setSettingsDirty(false)
-      setPendingEdits({})
-      setSelectedItems([])
-      setAncestors([])
-      setReloadToken((value) => value + 1)
-      setActiveView('editor')
-      return `Opened ${detail.relativePath}`
-    })
+    await runTask("Document opened.", async () => {
+      const detail = await api.getDocument(id);
+      setActiveDocument(detail);
+      setOpenDocIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+      setSettings(detail.settings);
+      setSettingsDirty(false);
+      setPendingEdits({});
+      setSelectedItems([]);
+      setAncestors([]);
+      setReloadToken((value) => value + 1);
+      setActiveView("editor");
+      return `Opened ${detail.relativePath}`;
+    });
   }
 
   async function refreshDocuments() {
     try {
-      const response = await api.listDocuments()
-      setDocuments(response.documents)
+      const response = await api.listDocuments();
+      setDocuments(response.documents);
       if (!activeDocument && response.documents[0]) {
-        await openDocument(response.documents[0].id)
+        await openDocument(response.documents[0].id);
       }
     } catch (error) {
-      toast(error instanceof Error ? error.message : 'Failed to refresh documents', 'error')
+      toast(
+        error instanceof Error ? error.message : "Failed to refresh documents",
+        "error",
+      );
     }
   }
 
   async function bootstrap() {
-    await runTask('Ready.', async () => {
-      await api.getWorkspace()
+    await runTask("Ready.", async () => {
+      await api.getWorkspace();
       const [documentResponse, templateResponse] = await Promise.all([
         api.listDocuments(),
         api.listTemplates(),
-      ])
-      setDocuments(documentResponse.documents)
-      setTemplates(templateResponse.templates)
+      ]);
+      setDocuments(documentResponse.documents);
+      setTemplates(templateResponse.templates);
       if (documentResponse.documents[0]) {
-        await openDocument(documentResponse.documents[0].id)
+        await openDocument(documentResponse.documents[0].id);
       }
-      setActiveView('editor')
-    })
+      setActiveView("editor");
+    });
   }
 
-  async function handleCreateNewDocument(name: string, settings: DocumentSettings) {
-    const fileName = name.endsWith('.html') || name.endsWith('.htm') ? name : `${name}.html`
-    const response = await api.createDocument({ name: fileName, settings })
+  async function handleCreateNewDocument(
+    name: string,
+    settings: DocumentSettings,
+  ) {
+    const fileName =
+      name.endsWith(".html") || name.endsWith(".htm") ? name : `${name}.html`;
+    const response = await api.createDocument({ name: fileName, settings });
     if (response.ok && response.document) {
-      await refreshDocuments()
-      await openDocument(response.document.id)
-      triggerConfetti()
+      await refreshDocuments();
+      await openDocument(response.document.id);
+      triggerConfetti();
     } else {
-      throw new Error('Failed to create new document')
+      throw new Error("Failed to create new document");
     }
   }
 
   useEffect(() => {
-    void bootstrap()
+    void bootstrap();
     // The initial load should run once; subsequent state changes are driven by explicit user actions.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, []);
 
   function updateToken(value: string) {
-    setTokenInput(value)
-    setStoredToken(value)
+    setTokenInput(value);
+    setStoredToken(value);
   }
 
   function handleSettingsChange(nextSettings: DocumentSettings) {
-    setSettings(nextSettings)
-    setSettingsDirty(true)
-    frameRef.current?.applyDocumentSettings(nextSettings)
+    setSettings(nextSettings);
+    setSettingsDirty(true);
+    frameRef.current?.applyDocumentSettings(nextSettings);
   }
 
-  function handleElementEdit(edit: Omit<ElementEdit, 'targetPath'>) {
+  function handleElementEdit(edit: Omit<ElementEdit, "targetPath">) {
     if (!selectedItems.length) {
-      return
+      return;
     }
 
-    const nextPending = { ...pendingEdits }
+    const nextPending = { ...pendingEdits };
     for (const item of selectedItems) {
-      const fullEdit: ElementEdit = { ...edit, targetPath: item.path }
-      frameRef.current?.applyElementEdit(fullEdit)
-      nextPending[item.path] = mergeEdits(nextPending[item.path], fullEdit)
+      const fullEdit: ElementEdit = { ...edit, targetPath: item.path };
+      frameRef.current?.applyElementEdit(fullEdit);
+      nextPending[item.path] = mergeEdits(nextPending[item.path], fullEdit);
     }
-    setPendingEdits(nextPending)
+    setPendingEdits(nextPending);
   }
 
   function discardLocalChanges() {
     if (!activeDocument) {
-      return
+      return;
     }
-    setPendingEdits({})
-    setSettingsDirty(false)
-    setSelectedItems([])
-    setReloadToken((value) => value + 1)
-    setStatus('Discarded local changes.')
+    setPendingEdits({});
+    setSettingsDirty(false);
+    setSelectedItems([]);
+    setReloadToken((value) => value + 1);
+    setStatus("Discarded local changes.");
   }
 
   async function saveChanges() {
     if (!activeDocument) {
-      return
+      return;
     }
-    await runTask('Saved changes.', async () => {
+    await runTask("Saved changes.", async () => {
       await api.saveEdits(activeDocument.id, {
         elementEdits: Object.values(pendingEdits),
         documentSettings: settingsDirty ? settings : undefined,
-      })
-      setPendingEdits({})
-      setSettingsDirty(false)
-      await openDocument(activeDocument.id, { force: true })
-      await refreshDocuments()
-      triggerConfetti()
+      });
+      setPendingEdits({});
+      setSettingsDirty(false);
+      await openDocument(activeDocument.id, { force: true });
+      await refreshDocuments();
+      triggerConfetti();
       // #32 — Save button success flash
-      setSaveBtnFlash(true)
-      setTimeout(() => setSaveBtnFlash(false), 1600)
-    })
+      setSaveBtnFlash(true);
+      setTimeout(() => setSaveBtnFlash(false), 1600);
+    });
   }
 
   async function exportHtml() {
     if (!activeDocument) {
-      return
+      return;
     }
-    await runTask('HTML export created.', async () => {
-      const result = await api.exportHtml(activeDocument.id)
-      triggerConfetti()
-      return `HTML export: ${result.path}`
-    })
+    await runTask("HTML export created.", async () => {
+      const result = await api.exportHtml(activeDocument.id);
+      triggerConfetti();
+      return `HTML export: ${result.path}`;
+    });
   }
 
   async function exportPdf() {
     if (!activeDocument) {
-      return
+      return;
     }
-    await runTask('PDF export created.', async () => {
-      const result = await api.exportPdf(activeDocument.id)
-      triggerConfetti()
-      return `PDF export: ${result.path}`
-    })
+    await runTask("PDF export created.", async () => {
+      const result = await api.exportPdf(activeDocument.id);
+      triggerConfetti();
+      return `PDF export: ${result.path}`;
+    });
   }
 
   async function saveTemplate() {
     if (!activeDocument || !selectedItems.length) {
-      return
+      return;
     }
-    await runTask('Template saved.', async () => {
-      const html = frameRef.current?.getSelectedHtml(inlineTemplateStyles) || ''
+    await runTask("Template saved.", async () => {
+      const html =
+        frameRef.current?.getSelectedHtml(inlineTemplateStyles) || "";
       if (!html.trim()) {
-        throw new Error('No selected HTML was available.')
+        throw new Error("No selected HTML was available.");
       }
       await api.saveTemplate({
-        name: templateName || (selectedItems.length > 1 ? `Grouped Component (${selectedItems.length} items)` : selectedItems[0].label),
+        name:
+          templateName ||
+          (selectedItems.length > 1
+            ? `Grouped Component (${selectedItems.length} items)`
+            : selectedItems[0].label),
         html,
         sourceDocumentId: activeDocument.id,
-      })
-      setTemplateName('')
-      const response = await api.listTemplates()
-      setTemplates(response.templates)
-      setSelectedTemplateId(response.templates[0]?.id || '')
-      setRenameTemplateName(response.templates[0]?.name || '')
-      return 'Component saved.'
-    })
+      });
+      setTemplateName("");
+      const response = await api.listTemplates();
+      setTemplates(response.templates);
+      setSelectedTemplateId(response.templates[0]?.id || "");
+      setRenameTemplateName(response.templates[0]?.name || "");
+      return "Component saved.";
+    });
   }
 
   async function insertTemplate() {
     if (!activeDocument || !selectedTemplateId || !selectedItems[0]) {
-      return
+      return;
     }
-    await runTask('Template inserted.', async () => {
+    await runTask("Template inserted.", async () => {
       await api.insertTemplate(activeDocument.id, {
         templateId: selectedTemplateId,
         targetPath: selectedItems[0].path,
         placement: templatePlacement,
-      })
-      setSelectedItems([])
-      await openDocument(activeDocument.id, { force: true })
-      return 'Component inserted.'
-    })
+      });
+      setSelectedItems([]);
+      await openDocument(activeDocument.id, { force: true });
+      return "Component inserted.";
+    });
   }
 
   async function renameTemplate() {
     if (!selectedTemplateId || !renameTemplateName.trim()) {
-      return
+      return;
     }
-    await runTask('Component renamed.', async () => {
-      const response = await api.updateTemplate(selectedTemplateId, { name: renameTemplateName })
-      const templateResponse = await api.listTemplates()
-      setTemplates(templateResponse.templates)
-      setSelectedTemplateId(response.template.id)
-      setRenameTemplateName(response.template.name)
-      return 'Component renamed.'
-    })
+    await runTask("Component renamed.", async () => {
+      const response = await api.updateTemplate(selectedTemplateId, {
+        name: renameTemplateName,
+      });
+      const templateResponse = await api.listTemplates();
+      setTemplates(templateResponse.templates);
+      setSelectedTemplateId(response.template.id);
+      setRenameTemplateName(response.template.name);
+      return "Component renamed.";
+    });
   }
 
   async function deleteTemplate() {
     if (!selectedTemplateId) {
-      return
+      return;
     }
-    const template = templates.find((t) => t.id === selectedTemplateId)
+    const template = templates.find((t) => t.id === selectedTemplateId);
     setDialogConfig({
       isOpen: true,
-      title: 'Delete Component',
-      message: `Are you sure you want to delete the component "${template?.name || 'this component'}"? This action cannot be undone.`,
-      type: 'confirm',
-      confirmText: 'Delete',
-      cancelText: 'Cancel',
+      title: "Delete Component",
+      message: `Are you sure you want to delete the component "${template?.name || "this component"}"? This action cannot be undone.`,
+      type: "confirm",
+      confirmText: "Delete",
+      cancelText: "Cancel",
       onConfirm: async () => {
-        await runTask('Component deleted.', async () => {
-          await api.deleteTemplate(selectedTemplateId)
-          const response = await api.listTemplates()
-          setTemplates(response.templates)
-          setSelectedTemplateId(response.templates[0]?.id || '')
-          setRenameTemplateName(response.templates[0]?.name || '')
-          return 'Component deleted.'
-        })
+        await runTask("Component deleted.", async () => {
+          await api.deleteTemplate(selectedTemplateId);
+          const response = await api.listTemplates();
+          setTemplates(response.templates);
+          setSelectedTemplateId(response.templates[0]?.id || "");
+          setRenameTemplateName(response.templates[0]?.name || "");
+          return "Component deleted.";
+        });
       },
-      onCancel: () => {}
-    })
+      onCancel: () => {},
+    });
   }
 
   function handleTemplateSelection(id: string) {
-    setSelectedTemplateId(id)
-    setRenameTemplateName(templates.find((template) => template.id === id)?.name || '')
+    setSelectedTemplateId(id);
+    setRenameTemplateName(
+      templates.find((template) => template.id === id)?.name || "",
+    );
   }
 
   useEffect(() => {
     function handleGlobalKeyDown(e: KeyboardEvent) {
-      const isMeta = e.metaKey || e.ctrlKey
-      
-      if (isMeta && e.key.toLowerCase() === 'n') {
-        e.preventDefault()
-        setIsNewDocModalOpen(true)
+      const isMeta = e.metaKey || e.ctrlKey;
+
+      if (isMeta && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        setIsNewDocModalOpen(true);
       }
 
-      if (isMeta && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        setShowCommandPalette((prev) => !prev)
+      if (isMeta && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setShowCommandPalette((prev) => !prev);
       }
-      
-      if (isMeta && e.key === '.') {
-        e.preventDefault()
-        setZenMode((prev) => !prev)
+
+      if (isMeta && e.key === ".") {
+        e.preventDefault();
+        setZenMode((prev) => !prev);
       }
-      
-      if (isMeta && e.key.toLowerCase() === 's') {
-        e.preventDefault()
+
+      if (isMeta && e.key.toLowerCase() === "s") {
+        e.preventDefault();
         if (hasUnsavedChanges) {
-          void saveChanges()
+          void saveChanges();
         }
       }
 
-      if (isMeta && e.key.toLowerCase() === 'e') {
-        e.preventDefault()
+      if (isMeta && e.key.toLowerCase() === "e") {
+        e.preventDefault();
         if (activeDocument) {
-          void exportHtml()
+          void exportHtml();
         }
       }
 
-      if (isMeta && e.key.toLowerCase() === 'p') {
-        e.preventDefault()
+      if (isMeta && e.key.toLowerCase() === "p") {
+        e.preventDefault();
         if (activeDocument) {
-          void exportPdf()
+          void exportPdf();
         }
       }
 
-      if (isMeta && e.shiftKey && e.key.toLowerCase() === 'l') {
-        e.preventDefault()
-        setSidebarLayout((prev) => ({ ...prev, visible: !prev.visible }))
+      if (isMeta && e.shiftKey && e.key.toLowerCase() === "l") {
+        e.preventDefault();
+        setSidebarLayout((prev) => ({ ...prev, visible: !prev.visible }));
       }
 
-      if (isMeta && e.shiftKey && e.key.toLowerCase() === 'r') {
-        e.preventDefault()
-        setInspectorLayout((prev) => ({ ...prev, visible: !prev.visible }))
+      if (isMeta && e.shiftKey && e.key.toLowerCase() === "r") {
+        e.preventDefault();
+        setInspectorLayout((prev) => ({ ...prev, visible: !prev.visible }));
       }
 
-      if (isMeta && e.shiftKey && e.key.toLowerCase() === 'i') {
-        e.preventDefault()
-        setInfoPanelLayout((prev) => ({ ...prev, visible: !prev.visible }))
+      if (isMeta && e.shiftKey && e.key.toLowerCase() === "i") {
+        e.preventDefault();
+        setInfoPanelLayout((prev) => ({ ...prev, visible: !prev.visible }));
       }
     }
-    
-    window.addEventListener('keydown', handleGlobalKeyDown)
-    return () => window.removeEventListener('keydown', handleGlobalKeyDown)
+
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasUnsavedChanges, activeDocument, settings, pendingEdits, settingsDirty, sidebarLayout, inspectorLayout, infoPanelLayout])
+  }, [
+    hasUnsavedChanges,
+    activeDocument,
+    settings,
+    pendingEdits,
+    settingsDirty,
+    sidebarLayout,
+    inspectorLayout,
+    infoPanelLayout,
+  ]);
 
   const allCommands = (() => {
     const list = [
       {
-        label: 'Save Changes',
-        category: 'File',
-        shortcut: '⌘S',
-        action: () => { if (hasUnsavedChanges) void saveChanges() }
+        label: "Save Changes",
+        category: "File",
+        shortcut: "⌘S",
+        action: () => {
+          if (hasUnsavedChanges) void saveChanges();
+        },
       },
       {
-        label: 'Discard Local Changes',
-        category: 'File',
-        action: () => { if (hasUnsavedChanges) discardLocalChanges() }
+        label: "Discard Local Changes",
+        category: "File",
+        action: () => {
+          if (hasUnsavedChanges) discardLocalChanges();
+        },
       },
       {
-        label: 'Preferences',
-        category: 'Navigation',
-        shortcut: '⌘,',
-        action: () => setActiveView('settings')
+        label: "Preferences",
+        category: "Navigation",
+        shortcut: "⌘,",
+        action: () => setActiveView("settings"),
       },
       {
-        label: 'Switch to Document Editor',
-        category: 'Navigation',
-        action: () => setActiveView('editor')
+        label: "Switch to Document Editor",
+        category: "Navigation",
+        action: () => setActiveView("editor"),
       },
       {
-        label: 'Switch to Component Library',
-        category: 'Navigation',
-        action: () => setActiveView('library')
+        label: "Switch to Component Library",
+        category: "Navigation",
+        action: () => setActiveView("library"),
       },
       {
-        label: 'Toggle Navigator (Sidebar)',
-        category: 'View',
-        shortcut: '⌘⇧L',
-        action: () => setSidebarLayout((prev) => ({ ...prev, visible: !prev.visible }))
+        label: "Toggle Navigator (Sidebar)",
+        category: "View",
+        shortcut: "⌘⇧L",
+        action: () =>
+          setSidebarLayout((prev) => ({ ...prev, visible: !prev.visible })),
       },
       {
-        label: 'Toggle Inspector',
-        category: 'View',
-        shortcut: '⌘⇧R',
-        action: () => setInspectorLayout((prev) => ({ ...prev, visible: !prev.visible }))
+        label: "Toggle Inspector",
+        category: "View",
+        shortcut: "⌘⇧R",
+        action: () =>
+          setInspectorLayout((prev) => ({ ...prev, visible: !prev.visible })),
       },
       {
-        label: 'Toggle Selection Info Panel',
-        category: 'View',
-        shortcut: '⌘⇧I',
-        action: () => setInfoPanelLayout((prev) => ({ ...prev, visible: !prev.visible }))
+        label: "Toggle Selection Info Panel",
+        category: "View",
+        shortcut: "⌘⇧I",
+        action: () =>
+          setInfoPanelLayout((prev) => ({ ...prev, visible: !prev.visible })),
       },
       {
-        label: 'Toggle Zen Mode',
-        category: 'View',
-        shortcut: '⌘.',
-        action: () => setZenMode((z) => !z)
+        label: "Toggle Zen Mode",
+        category: "View",
+        shortcut: "⌘.",
+        action: () => setZenMode((z) => !z),
       },
       {
-        label: 'Export Document to HTML',
-        category: 'Export',
-        shortcut: '⌘E',
-        action: () => { if (activeDocument) void exportHtml() }
+        label: "Export Document to HTML",
+        category: "Export",
+        shortcut: "⌘E",
+        action: () => {
+          if (activeDocument) void exportHtml();
+        },
       },
       {
-        label: 'Export Document to PDF',
-        category: 'Export',
-        shortcut: '⌘P',
-        action: () => { if (activeDocument) void exportPdf() }
+        label: "Export Document to PDF",
+        category: "Export",
+        shortcut: "⌘P",
+        action: () => {
+          if (activeDocument) void exportPdf();
+        },
       },
       {
-        label: 'Use Light Theme',
-        category: 'Preferences',
-        action: () => setTheme('light')
+        label: "Use Light Theme",
+        category: "Preferences",
+        action: () => setTheme("light"),
       },
       {
-        label: 'Use Dark Theme',
-        category: 'Preferences',
-        action: () => setTheme('dark')
+        label: "Use Dark Theme",
+        category: "Preferences",
+        action: () => setTheme("dark"),
       },
       {
-        label: 'Use OLED True Black Theme',
-        category: 'Preferences',
-        action: () => setTheme('true-black')
+        label: "Use OLED True Black Theme",
+        category: "Preferences",
+        action: () => setTheme("true-black"),
       },
       {
-        label: 'Use System Default Theme',
-        category: 'Preferences',
-        action: () => setTheme('system')
+        label: "Use System Default Theme",
+        category: "Preferences",
+        action: () => setTheme("system"),
       },
       {
-        label: 'Use Accent Accent: Blue',
-        category: 'Preferences',
-        action: () => setAccent('blue')
+        label: "Use Accent Accent: Blue",
+        category: "Preferences",
+        action: () => setAccent("blue"),
       },
       {
-        label: 'Use Accent Accent: Purple',
-        category: 'Preferences',
-        action: () => setAccent('purple')
+        label: "Use Accent Accent: Purple",
+        category: "Preferences",
+        action: () => setAccent("purple"),
       },
       {
-        label: 'Use Accent Accent: Teal',
-        category: 'Preferences',
-        action: () => setAccent('teal')
+        label: "Use Accent Accent: Teal",
+        category: "Preferences",
+        action: () => setAccent("teal"),
       },
       {
-        label: 'Use Accent Accent: Orange',
-        category: 'Preferences',
-        action: () => setAccent('orange')
+        label: "Use Accent Accent: Orange",
+        category: "Preferences",
+        action: () => setAccent("orange"),
       },
       {
-        label: 'Use Accent Accent: Rose',
-        category: 'Preferences',
-        action: () => setAccent('rose')
-      }
-    ]
+        label: "Use Accent Accent: Rose",
+        category: "Preferences",
+        action: () => setAccent("rose"),
+      },
+    ];
 
     documents.forEach((doc) => {
       list.push({
         label: `Open Document: ${doc.name}`,
-        category: 'Documents',
-        shortcut: '',
-        action: () => { void openDocument(doc.id) }
-      })
-    })
+        category: "Documents",
+        shortcut: "",
+        action: () => {
+          void openDocument(doc.id);
+        },
+      });
+    });
 
     templates.forEach((tmpl) => {
       list.push({
         label: `Insert Component: ${tmpl.name}`,
-        category: 'Components',
-        shortcut: '',
+        category: "Components",
+        shortcut: "",
         action: () => {
-          setSelectedTemplateId(tmpl.id)
-          setTimeout(() => { void insertTemplate() }, 50)
-        }
-      })
-    })
+          setSelectedTemplateId(tmpl.id);
+          setTimeout(() => {
+            void insertTemplate();
+          }, 50);
+        },
+      });
+    });
 
-    return list
-  })()
+    return list;
+  })();
 
   const filteredCommands = (() => {
-    const query = commandSearch.trim().toLowerCase()
+    const query = commandSearch.trim().toLowerCase();
     if (!query) {
-      return allCommands.slice(0, 10)
+      return allCommands.slice(0, 10);
     }
     return allCommands.filter((cmd) => {
       return (
         cmd.label.toLowerCase().includes(query) ||
         cmd.category.toLowerCase().includes(query)
-      )
-    })
-  })()
+      );
+    });
+  })();
 
   const handlePaletteKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      setPaletteIndex((prev) => Math.min(filteredCommands.length - 1, prev + 1))
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      setPaletteIndex((prev) => Math.max(0, prev - 1))
-    } else if (e.key === 'Enter') {
-      e.preventDefault()
-      const selected = filteredCommands[paletteIndex]
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setPaletteIndex((prev) =>
+        Math.min(filteredCommands.length - 1, prev + 1),
+      );
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setPaletteIndex((prev) => Math.max(0, prev - 1));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const selected = filteredCommands[paletteIndex];
       if (selected) {
-        selected.action()
-        setShowCommandPalette(false)
-        setCommandSearch('')
+        selected.action();
+        setShowCommandPalette(false);
+        setCommandSearch("");
       }
-    } else if (e.key === 'Escape') {
-      setShowCommandPalette(false)
-      setCommandSearch('')
+    } else if (e.key === "Escape") {
+      setShowCommandPalette(false);
+      setCommandSearch("");
     }
-  }
-
-
-
+  };
 
   function renderLibraryScreen() {
     return (
@@ -1324,9 +1816,11 @@ function App() {
           <div className="library-grid-header">
             <div>
               <h2>Components Library</h2>
-              <span>{filteredTemplates.length} templates saved in this workspace</span>
+              <span>
+                {filteredTemplates.length} templates saved in this workspace
+              </span>
             </div>
-            
+
             <div className="library-search-box">
               <Search size={12} />
               <input
@@ -1336,7 +1830,7 @@ function App() {
               />
             </div>
           </div>
-          
+
           <div className="library-cards-scroll">
             <div className="library-cards-grid">
               {filteredTemplates.map((template) => (
@@ -1344,14 +1838,14 @@ function App() {
                   key={template.id}
                   className={
                     template.id === selectedTemplateId
-                      ? 'library-card-item library-card-item--active'
-                      : 'library-card-item'
+                      ? "library-card-item library-card-item--active"
+                      : "library-card-item"
                   }
                   onClick={() => handleTemplateSelection(template.id)}
                   onContextMenu={(e) => handleTemplateContextMenu(e, template)}
                   onDoubleClick={() => {
-                    handleTemplateSelection(template.id)
-                    setActiveView('editor')
+                    handleTemplateSelection(template.id);
+                    setActiveView("editor");
                   }}
                 >
                   <div className="library-card-preview">
@@ -1360,8 +1854,12 @@ function App() {
                   </div>
                   <div className="library-card-meta">
                     <strong>{template.name}</strong>
-                    <span>{template.previewText || 'No text preview available'}</span>
-                    <small>{template.sourceDocumentPath || 'Saved template'}</small>
+                    <span>
+                      {template.previewText || "No text preview available"}
+                    </span>
+                    <small>
+                      {template.sourceDocumentPath || "Saved template"}
+                    </small>
                   </div>
                 </div>
               ))}
@@ -1369,19 +1867,22 @@ function App() {
                 <div className="library-empty-grid">
                   <Library size={36} />
                   <strong>No components found</strong>
-                  <span>Save components from the document editor workspace to see them here.</span>
+                  <span>
+                    Save components from the document editor workspace to see
+                    them here.
+                  </span>
                 </div>
               )}
             </div>
           </div>
         </div>
-        
+
         {/* Right Details Pane (Xcode Style Inspector) */}
         <aside className="library-inspector-column">
           <div className="inspector-header-title">
             <span>Component Properties</span>
           </div>
-          
+
           {activeTemplate ? (
             <div className="library-inspector-scroll">
               <section className="library-inspector-section">
@@ -1393,7 +1894,9 @@ function App() {
                   </div>
                   <div className="property-row">
                     <span>Source doc</span>
-                    <strong>{activeTemplate.sourceDocumentPath || 'Unknown'}</strong>
+                    <strong>
+                      {activeTemplate.sourceDocumentPath || "Unknown"}
+                    </strong>
                   </div>
                   <div className="property-row">
                     <span>Snippet size</span>
@@ -1401,49 +1904,61 @@ function App() {
                   </div>
                 </div>
               </section>
-              
+
               <section className="library-inspector-section">
                 <h3>Rename Component</h3>
                 <label className="field">
                   <span>Name</span>
                   <input
                     value={renameTemplateName}
-                    onChange={(event) => setRenameTemplateName(event.target.value)}
+                    onChange={(event) =>
+                      setRenameTemplateName(event.target.value)
+                    }
                     placeholder="Enter new template name…"
                   />
                 </label>
                 <button
                   type="button"
                   className="secondary-button"
-                  style={{ width: '100%', minHeight: 28, fontSize: 11 }}
+                  style={{ width: "100%", minHeight: 28, fontSize: 11 }}
                   disabled={!renameTemplateName.trim()}
                   onClick={renameTemplate}
                 >
                   Rename Component
                 </button>
               </section>
-              
+
               <section className="library-inspector-section">
                 <h3>HTML Source Code</h3>
                 <div className="library-code-wrapper">
-                  <pre><code>{activeTemplate.html}</code></pre>
+                  <pre>
+                    <code>{activeTemplate.html}</code>
+                  </pre>
                 </div>
               </section>
-              
-              <section className="library-inspector-section" style={{ borderBottom: 'none', marginTop: 'auto' }}>
+
+              <section
+                className="library-inspector-section"
+                style={{ borderBottom: "none", marginTop: "auto" }}
+              >
                 <div className="split-actions">
                   <button
                     type="button"
                     className="primary-button"
                     style={{ flex: 1, minHeight: 28, fontSize: 11 }}
-                    onClick={() => setActiveView('editor')}
+                    onClick={() => setActiveView("editor")}
                   >
                     Open in Editor
                   </button>
                   <button
                     type="button"
                     className="button--danger"
-                    style={{ minHeight: 28, fontSize: 11, padding: '0 10px', width: 'auto' }}
+                    style={{
+                      minHeight: 28,
+                      fontSize: 11,
+                      padding: "0 10px",
+                      width: "auto",
+                    }}
                     onClick={deleteTemplate}
                   >
                     Delete
@@ -1459,7 +1974,7 @@ function App() {
           )}
         </aside>
       </div>
-    )
+    );
   }
 
   function renderSettingsScreen() {
@@ -1468,14 +1983,18 @@ function App() {
         <div className="settings-grid-column">
           <div className="settings-header">
             <h2>Preferences</h2>
-            <span>Configure security parameters, interface styling, and theme preferences</span>
+            <span>
+              Configure security parameters, interface styling, and theme
+              preferences
+            </span>
           </div>
-          
+
           <div className="settings-content-scroll">
             <div className="settings-form-box">
               <h3>Remote Security Settings</h3>
               <p className="settings-desc">
-                Provide an authorization token to enable write/export options for remote servers.
+                Provide an authorization token to enable write/export options
+                for remote servers.
               </p>
               <div className="settings-row-input">
                 <input
@@ -1486,18 +2005,34 @@ function App() {
                   style={{ maxWidth: 360 }}
                 />
               </div>
-              
+
               <div className="settings-divider" />
-              
+
               <h3>Interface Customization</h3>
               <p className="settings-desc">
                 Change the interface theme and accent highlight.
               </p>
-              <div style={{ display: 'flex', gap: 24, marginTop: 12, marginBottom: 16 }}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 24,
+                  marginTop: 12,
+                  marginBottom: 16,
+                }}
+              >
                 <Field label="System Accent">
                   <select
                     value={accent}
-                    onChange={(e) => setAccent(e.target.value as 'blue' | 'purple' | 'teal' | 'orange' | 'rose')}
+                    onChange={(e) =>
+                      setAccent(
+                        e.target.value as
+                          | "blue"
+                          | "purple"
+                          | "teal"
+                          | "orange"
+                          | "rose",
+                      )
+                    }
                     style={{ minWidth: 160 }}
                   >
                     <option value="blue">Blue (Apple Default)</option>
@@ -1511,7 +2046,15 @@ function App() {
                 <Field label="System Theme">
                   <select
                     value={theme}
-                    onChange={(e) => setTheme(e.target.value as 'system' | 'dark' | 'light' | 'true-black')}
+                    onChange={(e) =>
+                      setTheme(
+                        e.target.value as
+                          | "system"
+                          | "dark"
+                          | "light"
+                          | "true-black",
+                      )
+                    }
                     style={{ minWidth: 160 }}
                   >
                     <option value="system">System Default</option>
@@ -1523,7 +2066,7 @@ function App() {
               </div>
 
               <div className="settings-divider" />
-              
+
               <h3>Status Info</h3>
               <div className="settings-info-grid">
                 <div className="info-row">
@@ -1535,15 +2078,15 @@ function App() {
                   <strong>{templates.length} elements saved</strong>
                 </div>
               </div>
-              
+
               <div className="settings-divider" />
-              
+
               <div className="settings-actions-bar">
                 <button
                   type="button"
                   className="secondary-button"
-                  style={{ width: 'auto' }}
-                  onClick={() => setActiveView('editor')}
+                  style={{ width: "auto" }}
+                  onClick={() => setActiveView("editor")}
                 >
                   Return to Document Editor
                 </button>
@@ -1552,16 +2095,18 @@ function App() {
           </div>
         </div>
       </div>
-    )
+    );
   }
-
 
   const cascadeFloatingPanels = () => {
     const visiblePanels = [
-      { id: 'sidebar', layout: sidebarLayout, set: setSidebarLayout },
-      { id: 'inspector', layout: inspectorLayout, set: setInspectorLayout },
-      { id: 'info-panel', layout: infoPanelLayout, set: setInfoPanelLayout },
-    ].filter((p) => p.layout.visible && (p.id !== 'info-panel' || selectedItems.length > 0))
+      { id: "sidebar", layout: sidebarLayout, set: setSidebarLayout },
+      { id: "inspector", layout: inspectorLayout, set: setInspectorLayout },
+      { id: "info-panel", layout: infoPanelLayout, set: setInfoPanelLayout },
+    ].filter(
+      (p) =>
+        p.layout.visible && (p.id !== "info-panel" || selectedItems.length > 0),
+    );
 
     visiblePanels.forEach((p, idx) => {
       p.set({
@@ -1572,28 +2117,31 @@ function App() {
         h: 400,
         x: 60 + idx * 40,
         y: 80 + idx * 40,
-      })
-    })
+      });
+    });
 
-    toast('Windows cascaded', 'success')
-  }
+    toast("Windows cascaded", "success");
+  };
 
   const tileFloatingPanels = () => {
     const visiblePanels = [
-      { id: 'sidebar', layout: sidebarLayout, set: setSidebarLayout },
-      { id: 'inspector', layout: inspectorLayout, set: setInspectorLayout },
-      { id: 'info-panel', layout: infoPanelLayout, set: setInfoPanelLayout },
-    ].filter((p) => p.layout.visible && (p.id !== 'info-panel' || selectedItems.length > 0))
+      { id: "sidebar", layout: sidebarLayout, set: setSidebarLayout },
+      { id: "inspector", layout: inspectorLayout, set: setInspectorLayout },
+      { id: "info-panel", layout: infoPanelLayout, set: setInfoPanelLayout },
+    ].filter(
+      (p) =>
+        p.layout.visible && (p.id !== "info-panel" || selectedItems.length > 0),
+    );
 
-    if (visiblePanels.length === 0) return
+    if (visiblePanels.length === 0) return;
 
-    const N = visiblePanels.length
-    const padding = 6
-    const topOffset = 36 // TOPBAR_H
-    const bottomOffset = 16 // FOOTER_H
+    const N = visiblePanels.length;
+    const padding = 6;
+    const topOffset = 36; // TOPBAR_H
+    const bottomOffset = 16; // FOOTER_H
 
-    const w = (window.innerWidth - padding * (N + 1)) / N
-    const h = window.innerHeight - topOffset - bottomOffset - padding * 2
+    const w = (window.innerWidth - padding * (N + 1)) / N;
+    const h = window.innerHeight - topOffset - bottomOffset - padding * 2;
 
     visiblePanels.forEach((p, idx) => {
       p.set({
@@ -1604,39 +2152,39 @@ function App() {
         h: h,
         x: padding + idx * (w + padding),
         y: topOffset + padding,
-      })
-    })
+      });
+    });
 
-    toast('Windows tiled', 'success')
-  }
+    toast("Windows tiled", "success");
+  };
 
   const dockAllPanels = () => {
     setSidebarLayout((prev) => ({
       ...prev,
       isDocked: true,
       maximized: false,
-      zone: 'dock-left',
+      zone: "dock-left",
       dockColumn: 0,
       dockRow: 0,
-    }))
+    }));
     setInspectorLayout((prev) => ({
       ...prev,
       isDocked: true,
       maximized: false,
-      zone: 'dock-right',
+      zone: "dock-right",
       dockColumn: 0,
       dockRow: 0,
-    }))
+    }));
     setInfoPanelLayout((prev) => ({
       ...prev,
       isDocked: true,
       maximized: false,
-      zone: 'dock-bottom',
+      zone: "dock-bottom",
       dockColumn: 0,
       dockRow: 0,
-    }))
-    toast('All panels docked', 'success')
-  }
+    }));
+    toast("All panels docked", "success");
+  };
 
   const floatAllPanels = () => {
     setSidebarLayout((prev) => ({
@@ -1647,7 +2195,7 @@ function App() {
       y: 80,
       w: 240,
       h: 500,
-    }))
+    }));
     setInspectorLayout((prev) => ({
       ...prev,
       isDocked: false,
@@ -1656,7 +2204,7 @@ function App() {
       y: 80,
       w: 280,
       h: 500,
-    }))
+    }));
     setInfoPanelLayout((prev) => ({
       ...prev,
       isDocked: false,
@@ -1665,9 +2213,9 @@ function App() {
       y: 150,
       w: 320,
       h: 180,
-    }))
-    toast('All panels floated', 'success')
-  }
+    }));
+    toast("All panels floated", "success");
+  };
 
   const resetWindowLayout = () => {
     setSidebarLayout({
@@ -1676,174 +2224,519 @@ function App() {
       w: 220,
       h: window.innerHeight - 36 - 16 - 12,
       isDocked: true,
-      zone: 'dock-left',
+      zone: "dock-left",
       minimized: false,
       visible: true,
       dockColumn: 0,
       dockRow: 0,
       maximized: false,
-    })
+    });
     setInspectorLayout({
       x: window.innerWidth - 280 - 6,
       y: 42,
       w: 280,
       h: window.innerHeight - 36 - 16 - 12,
       isDocked: true,
-      zone: 'dock-right',
+      zone: "dock-right",
       minimized: false,
       visible: true,
       dockColumn: 0,
       dockRow: 0,
       maximized: false,
-    })
+    });
     setInfoPanelLayout({
       x: 300,
       y: window.innerHeight - 200,
       w: 320,
       h: 150,
       isDocked: false,
-      zone: 'free',
+      zone: "free",
       minimized: false,
       visible: false,
       dockColumn: 0,
       dockRow: 0,
       maximized: false,
-    })
-    toast('Window layout reset', 'success')
-  }
+    });
+    toast("Window layout reset", "success");
+  };
 
-  const menuBarRef = useRef<HTMLDivElement | null>(null)
+  const menuBarRef = useRef<HTMLDivElement | null>(null);
 
-  const handleMenuMouseDown = (menuName: string, e: React.MouseEvent<HTMLButtonElement>) => {
-    e.stopPropagation() // prevent ContextMenu's outside-mousedown from firing on this same event
-    const rect = e.currentTarget.getBoundingClientRect()
-    setMenuCoords({ x: rect.left, y: rect.bottom })
+  const handleMenuMouseDown = (
+    menuName: string,
+    e: React.MouseEvent<HTMLButtonElement>,
+  ) => {
+    e.stopPropagation(); // prevent ContextMenu's outside-mousedown from firing on this same event
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMenuCoords({ x: rect.left, y: rect.bottom });
     // Toggle: if already open, close it; otherwise open this one
-    setActiveMenu((prev) => (prev === menuName ? null : menuName))
-  }
+    setActiveMenu((prev) => (prev === menuName ? null : menuName));
+  };
 
-  const handleMenuMouseEnter = (menuName: string, e: React.MouseEvent<HTMLButtonElement>) => {
+  const handleMenuMouseEnter = (
+    menuName: string,
+    e: React.MouseEvent<HTMLButtonElement>,
+  ) => {
     if (activeMenu !== null && activeMenu !== menuName) {
-      const rect = e.currentTarget.getBoundingClientRect()
-      setMenuCoords({ x: rect.left, y: rect.bottom })
-      setActiveMenu(menuName)
+      const rect = e.currentTarget.getBoundingClientRect();
+      setMenuCoords({ x: rect.left, y: rect.bottom });
+      setActiveMenu(menuName);
     }
-  }
+  };
 
   const menuBarData = [
     {
-      name: 'File',
+      name: "File",
       items: [
-        { label: 'New Document', onClick: () => setIsNewDocModalOpen(true), shortcut: '⌘N' },
-        { label: 'Preferences...', onClick: () => setActiveView('settings'), shortcut: '⌘,' },
-        { divider: true },
-        { label: 'Save', disabled: !hasUnsavedChanges, onClick: saveChanges, shortcut: '⌘S' },
-        { label: 'Discard Changes', disabled: !hasUnsavedChanges, onClick: discardLocalChanges },
-      ],
-    },
-    {
-      name: 'Edit',
-      items: [
-        { label: 'Undo', disabled: true, shortcut: '⌘Z' },
-        { label: 'Redo', disabled: true, shortcut: '⇧⌘Z' },
+        {
+          label: "New Document",
+          onClick: () => setIsNewDocModalOpen(true),
+          shortcut: "⌘N",
+        },
+        {
+          label: "Preferences...",
+          onClick: () => setActiveView("settings"),
+          shortcut: "⌘,",
+        },
         { divider: true },
         {
-          label: 'Copy Agent Reference',
-          disabled: selectedItems.length === 0,
-          onClick: () => {
-            if (selectedItems.length > 0) {
-              void navigator.clipboard.writeText(selectedItems.map((item) => item.agentReference).join('\n'))
-              toast('References copied to clipboard', 'success')
-            }
-          },
-          shortcut: '⌘C',
+          label: "Save",
+          disabled: !hasUnsavedChanges,
+          onClick: saveChanges,
+          shortcut: "⌘S",
+        },
+        {
+          label: "Discard Changes",
+          disabled: !hasUnsavedChanges,
+          onClick: discardLocalChanges,
         },
       ],
     },
     {
-      name: 'View',
+      name: "Edit",
       items: [
-        { label: 'Navigator (Sidebar)', onClick: () => setSidebarLayout((prev) => ({ ...prev, visible: !prev.visible })), shortcut: '⌘⇧L' },
-        { label: 'Inspector', onClick: () => setInspectorLayout((prev) => ({ ...prev, visible: !prev.visible })), shortcut: '⌘⇧R' },
-        { label: 'Selection Info Panel', onClick: () => setInfoPanelLayout((prev) => ({ ...prev, visible: !prev.visible })), shortcut: '⌘⇧I' },
+        { label: "Undo", disabled: true, shortcut: "⌘Z" },
+        { label: "Redo", disabled: true, shortcut: "⇧⌘Z" },
         { divider: true },
-        { label: 'Toggle Zen Mode', onClick: () => setZenMode(!zenMode), shortcut: '⌘.' },
+        {
+          label: "Copy Agent Reference",
+          disabled: selectedItems.length === 0,
+          onClick: () => {
+            if (selectedItems.length > 0) {
+              void navigator.clipboard.writeText(
+                selectedItems.map((item) => item.agentReference).join("\n"),
+              );
+              toast("References copied to clipboard", "success");
+            }
+          },
+          shortcut: "⌘C",
+        },
       ],
     },
     {
-      name: 'Window',
+      name: "View",
       items: [
-        { label: 'Cascade Floating Windows', onClick: cascadeFloatingPanels },
-        { label: 'Tile Floating Windows', onClick: tileFloatingPanels },
+        {
+          label: "Navigator (Sidebar)",
+          onClick: () =>
+            setSidebarLayout((prev) => ({ ...prev, visible: !prev.visible })),
+          shortcut: "⌘⇧L",
+        },
+        {
+          label: "Inspector",
+          onClick: () =>
+            setInspectorLayout((prev) => ({ ...prev, visible: !prev.visible })),
+          shortcut: "⌘⇧R",
+        },
+        {
+          label: "Selection Info Panel",
+          onClick: () =>
+            setInfoPanelLayout((prev) => ({ ...prev, visible: !prev.visible })),
+          shortcut: "⌘⇧I",
+        },
         { divider: true },
-        { label: 'Dock All Panels', onClick: dockAllPanels },
-        { label: 'Float All Panels', onClick: floatAllPanels },
-        { label: 'Reset Window Layout', onClick: resetWindowLayout },
+        {
+          label: "Toggle Zen Mode",
+          onClick: () => setZenMode(!zenMode),
+          shortcut: "⌘.",
+        },
       ],
     },
     {
-      name: 'Export',
+      name: "Window",
       items: [
-        { label: 'Export HTML...', disabled: !activeDocument, onClick: exportHtml, shortcut: '⌘E' },
-        { label: 'Export PDF...', disabled: !activeDocument, onClick: exportPdf, shortcut: '⌘P' },
+        { label: "Cascade Floating Windows", onClick: cascadeFloatingPanels },
+        { label: "Tile Floating Windows", onClick: tileFloatingPanels },
+        { divider: true },
+        { label: "Dock All Panels", onClick: dockAllPanels },
+        { label: "Float All Panels", onClick: floatAllPanels },
+        { label: "Reset Window Layout", onClick: resetWindowLayout },
       ],
     },
     {
-      name: 'Help',
+      name: "Export",
       items: [
-        { label: 'Agent Guide', disabled: true },
-        { label: 'About Document Viewer', disabled: true },
+        {
+          label: "Export HTML...",
+          disabled: !activeDocument,
+          onClick: exportHtml,
+          shortcut: "⌘E",
+        },
+        {
+          label: "Export PDF...",
+          disabled: !activeDocument,
+          onClick: exportPdf,
+          shortcut: "⌘P",
+        },
       ],
     },
-  ]
+    {
+      name: "Help",
+      items: [
+        { label: "Agent Guide", disabled: true },
+        { label: "About Document Viewer", disabled: true },
+      ],
+    },
+  ];
 
   const renderSidebar = (isOnlyInColumn = true, isLastInColumn = false) => {
+    const isBottom =
+      sidebarLayout.isDocked && sidebarLayout.zone === "dock-bottom";
+
+    if (isBottom) {
+      return (
+        <FloatingPanel
+          id="sidebar"
+          title="Navigator"
+          layout={sidebarLayout}
+          onLayoutChange={(next) => handlePanelLayoutChange("sidebar", next)}
+          allowedZones={["free", "dock-left", "dock-right", "dock-bottom"]}
+          workspaceRef={shellRef}
+          minWidth={180}
+          minHeight={100}
+          isOnlyInColumn={isOnlyInColumn}
+          isLastInColumn={isLastInColumn}
+          reservedBottomSpace={bottomDockHeight}
+          allowBottomDock={
+            bottomDockOccupantId === null || bottomDockOccupantId === "sidebar"
+          }
+        >
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "row",
+              alignItems: "center",
+              flex: 1,
+              minHeight: 0,
+              padding: "0 12px",
+              gap: 16,
+              height: "100%",
+              overflow: "hidden",
+            }}
+            onContextMenu={handleSidebarContextMenu}
+          >
+            {/* Views section */}
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+                flexShrink: 0,
+              }}
+            >
+              <span
+                className="section-title"
+                style={{
+                  fontSize: 9,
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  opacity: 0.7,
+                }}
+              >
+                Views
+              </span>
+              <div
+                className="nav-list"
+                style={{ display: "flex", flexDirection: "row", gap: 4 }}
+              >
+                <button
+                  className={
+                    activeView === "editor"
+                      ? "nav-row nav-row--active"
+                      : "nav-row"
+                  }
+                  onClick={() => setActiveView("editor")}
+                  style={{ padding: "4px 10px", height: 26 }}
+                >
+                  <FileText size={11} />
+                  <span>Editor</span>
+                </button>
+                <button
+                  className={
+                    activeView === "library"
+                      ? "nav-row nav-row--active"
+                      : "nav-row"
+                  }
+                  onClick={() => setActiveView("library")}
+                  style={{ padding: "4px 10px", height: 26 }}
+                >
+                  <Library size={11} />
+                  <span>Library</span>
+                </button>
+                <button
+                  className={
+                    activeView === "settings"
+                      ? "nav-row nav-row--active"
+                      : "nav-row"
+                  }
+                  onClick={() => setActiveView("settings")}
+                  style={{ padding: "4px 10px", height: 26 }}
+                >
+                  <Sliders size={11} />
+                  <span>Preferences</span>
+                </button>
+              </div>
+            </div>
+
+            <div
+              style={{
+                width: 1,
+                height: "70%",
+                background: "var(--border-dim)",
+                flexShrink: 0,
+              }}
+            />
+
+            {/* Documents section */}
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 12,
+                flex: 1,
+                minWidth: 0,
+                height: "100%",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                  flexShrink: 0,
+                  width: 140,
+                }}
+              >
+                <span
+                  className="section-title"
+                  style={{
+                    fontSize: 9,
+                    fontWeight: 700,
+                    textTransform: "uppercase",
+                    opacity: 0.7,
+                  }}
+                >
+                  Documents
+                </span>
+                <div
+                  className="search-input-wrapper input-clearable"
+                  style={{ marginTop: 0, height: 26, padding: "0 6px" }}
+                >
+                  <Search size={10} className="search-icon" />
+                  <input
+                    className="search-input"
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Search…"
+                    style={{ fontSize: 11 }}
+                  />
+                  {search && (
+                    <button
+                      type="button"
+                      className="input-clear-btn"
+                      onClick={() => setSearch("")}
+                      style={{ fontSize: 12 }}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <HorizontalScrollContainer style={{ height: 36 }}>
+                <div
+                  className="document-list"
+                  style={{
+                    display: "flex",
+                    flexDirection: "row",
+                    gap: 6,
+                    alignItems: "center",
+                    padding: "0 4px",
+                  }}
+                >
+                  {filteredDocuments.map((document) => (
+                    <button
+                      type="button"
+                      key={document.id}
+                      className={
+                        activeDocument?.id === document.id
+                          ? "document-row document-row--active"
+                          : "document-row"
+                      }
+                      onClick={() => void openDocument(document.id)}
+                      onContextMenu={(e) =>
+                        handleDocumentContextMenu(e, document)
+                      }
+                      style={{
+                        flexShrink: 0,
+                        padding: "4px 12px",
+                        height: 28,
+                        display: "flex",
+                        alignItems: "center",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      <FileText size={11} style={{ marginRight: 6 }} />
+                      <span style={{ fontSize: 12 }}>{document.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </HorizontalScrollContainer>
+            </div>
+
+            <div
+              style={{
+                width: 1,
+                height: "70%",
+                background: "var(--border-dim)",
+                flexShrink: 0,
+              }}
+            />
+
+            {/* Quick Actions Footer */}
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "row",
+                gap: 6,
+                flexShrink: 0,
+              }}
+            >
+              <button
+                type="button"
+                className="sidebar-footer-btn"
+                title="New Document"
+                onClick={() => setIsNewDocModalOpen(true)}
+                style={{ width: 28, height: 28, borderRadius: 6 }}
+              >
+                <Plus size={13} />
+              </button>
+              <button
+                type="button"
+                className="sidebar-footer-btn"
+                title="Refresh Documents"
+                onClick={() => {
+                  void refreshDocuments();
+                  toast("Refreshed document list", "success");
+                }}
+                style={{ width: 28, height: 28, borderRadius: 6 }}
+              >
+                <RefreshCw size={12} />
+              </button>
+            </div>
+          </div>
+        </FloatingPanel>
+      );
+    }
+
     return (
       <FloatingPanel
         id="sidebar"
         title="Navigator"
         layout={sidebarLayout}
-        onLayoutChange={(next) => handlePanelLayoutChange('sidebar', next)}
-        allowedZones={['free', 'dock-left', 'dock-right', 'dock-bottom']}
+        onLayoutChange={(next) => handlePanelLayoutChange("sidebar", next)}
+        allowedZones={["free", "dock-left", "dock-right", "dock-bottom"]}
         workspaceRef={shellRef}
         minWidth={180}
         minHeight={120}
         isOnlyInColumn={isOnlyInColumn}
         isLastInColumn={isLastInColumn}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} onContextMenu={handleSidebarContextMenu}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            flex: 1,
+            minHeight: 0,
+          }}
+          onContextMenu={handleSidebarContextMenu}
+        >
           {/* macOS Sidebar Navigation Categories */}
-          <section className={`sidebar-section sidebar-nav-section ${!destinationsExpanded ? 'collapsed' : ''}`} style={{ paddingBottom: destinationsExpanded ? 8 : 6 }}>
-            <div className="section-title section-title-clickable" onClick={() => {
-              const next = !destinationsExpanded
-              setDestinationsExpanded(next)
-              localStorage.setItem('hdv-acc-destinations', String(next))
-            }}>
+          <section
+            className={`sidebar-section sidebar-nav-section ${!destinationsExpanded ? "collapsed" : ""}`}
+            style={{ paddingBottom: destinationsExpanded ? 8 : 6 }}
+          >
+            <div
+              className="section-title section-title-clickable"
+              onClick={() => {
+                const next = !destinationsExpanded;
+                setDestinationsExpanded(next);
+                localStorage.setItem("hdv-acc-destinations", String(next));
+              }}
+            >
               <div className="section-title-left">
-                {destinationsExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                {destinationsExpanded ? (
+                  <ChevronDown size={10} />
+                ) : (
+                  <ChevronRight size={10} />
+                )}
                 <span>Views</span>
               </div>
             </div>
-            <div className={`sidebar-section-content ${destinationsExpanded ? 'expanded' : 'collapsed'}`}>
+            <div
+              className={`sidebar-section-content ${destinationsExpanded ? "expanded" : "collapsed"}`}
+            >
               <div>
-                <div className="nav-list" style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 6 }}>
+                <div
+                  className="nav-list"
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 2,
+                    marginTop: 6,
+                  }}
+                >
                   <button
-                    className={activeView === 'editor' ? 'nav-row nav-row--active' : 'nav-row'}
-                    onClick={() => setActiveView('editor')}
+                    className={
+                      activeView === "editor"
+                        ? "nav-row nav-row--active"
+                        : "nav-row"
+                    }
+                    onClick={() => setActiveView("editor")}
                   >
                     <FileText size={12} />
                     <span>Document Editor</span>
                   </button>
                   <button
-                    className={activeView === 'library' ? 'nav-row nav-row--active' : 'nav-row'}
-                    onClick={() => setActiveView('library')}
+                    className={
+                      activeView === "library"
+                        ? "nav-row nav-row--active"
+                        : "nav-row"
+                    }
+                    onClick={() => setActiveView("library")}
                   >
                     <Library size={12} />
                     <span>Component Library</span>
                   </button>
                   <button
-                    className={activeView === 'settings' ? 'nav-row nav-row--active' : 'nav-row'}
-                    onClick={() => setActiveView('settings')}
+                    className={
+                      activeView === "settings"
+                        ? "nav-row nav-row--active"
+                        : "nav-row"
+                    }
+                    onClick={() => setActiveView("settings")}
                   >
                     <Sliders size={12} />
                     <span>Preferences</span>
@@ -1854,21 +2747,45 @@ function App() {
           </section>
 
           {/* Document list */}
-          <section className={`sidebar-section sidebar-section--grow ${!documentsExpanded ? 'collapsed' : ''}`} style={{ paddingBottom: documentsExpanded ? 12 : 6, borderBottom: 'none' }}>
-            <div className="section-title section-title-clickable" onClick={() => {
-              const next = !documentsExpanded
-              setDocumentsExpanded(next)
-              localStorage.setItem('hdv-acc-documents', String(next))
-            }}>
+          <section
+            className={`sidebar-section sidebar-section--grow ${!documentsExpanded ? "collapsed" : ""}`}
+            style={{
+              paddingBottom: documentsExpanded ? 12 : 6,
+              borderBottom: "none",
+            }}
+          >
+            <div
+              className="section-title section-title-clickable"
+              onClick={() => {
+                const next = !documentsExpanded;
+                setDocumentsExpanded(next);
+                localStorage.setItem("hdv-acc-documents", String(next));
+              }}
+            >
               <div className="section-title-left">
-                {documentsExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                {documentsExpanded ? (
+                  <ChevronDown size={10} />
+                ) : (
+                  <ChevronRight size={10} />
+                )}
                 <span>Documents</span>
               </div>
               {documentsExpanded && <strong>{documents.length}</strong>}
             </div>
-            <div className={`sidebar-section-content ${documentsExpanded ? 'expanded' : 'collapsed'}`}>
-              <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                <div className="search-input-wrapper input-clearable" style={{ marginTop: 8 }}>
+            <div
+              className={`sidebar-section-content ${documentsExpanded ? "expanded" : "collapsed"}`}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  minHeight: 0,
+                }}
+              >
+                <div
+                  className="search-input-wrapper input-clearable"
+                  style={{ marginTop: 8 }}
+                >
                   <Search size={11} className="search-icon" />
                   <input
                     className="search-input"
@@ -1880,7 +2797,7 @@ function App() {
                     <button
                       type="button"
                       className="input-clear-btn"
-                      onClick={() => setSearch('')}
+                      onClick={() => setSearch("")}
                       title="Clear search"
                     >
                       ×
@@ -1893,10 +2810,14 @@ function App() {
                       type="button"
                       key={document.id}
                       className={
-                        activeDocument?.id === document.id ? 'document-row document-row--active' : 'document-row'
+                        activeDocument?.id === document.id
+                          ? "document-row document-row--active"
+                          : "document-row"
                       }
                       onClick={() => void openDocument(document.id)}
-                      onContextMenu={(e) => handleDocumentContextMenu(e, document)}
+                      onContextMenu={(e) =>
+                        handleDocumentContextMenu(e, document)
+                      }
                     >
                       <div className="doc-row-content">
                         <FileText size={12} />
@@ -1933,8 +2854,8 @@ function App() {
               className="sidebar-footer-btn"
               title="Refresh Documents"
               onClick={() => {
-                void refreshDocuments()
-                toast('Refreshed document list', 'success')
+                void refreshDocuments();
+                toast("Refreshed document list", "success");
               }}
             >
               <RefreshCw size={11} />
@@ -1942,8 +2863,8 @@ function App() {
           </div>
         </div>
       </FloatingPanel>
-    )
-  }
+    );
+  };
 
   const renderInspector = (isOnlyInColumn = true, isLastInColumn = false) => {
     return (
@@ -1951,13 +2872,17 @@ function App() {
         id="inspector"
         title="Inspector"
         layout={inspectorLayout}
-        onLayoutChange={(next) => handlePanelLayoutChange('inspector', next)}
-        allowedZones={['free', 'dock-left', 'dock-right', 'dock-bottom']}
+        onLayoutChange={(next) => handlePanelLayoutChange("inspector", next)}
+        allowedZones={["free", "dock-left", "dock-right", "dock-bottom"]}
         workspaceRef={shellRef}
         minWidth={240}
         minHeight={120}
         isOnlyInColumn={isOnlyInColumn}
         isLastInColumn={isLastInColumn}
+        reservedBottomSpace={bottomDockHeight}
+        allowBottomDock={
+          bottomDockOccupantId === null || bottomDockOccupantId === "inspector"
+        }
       >
         <InspectorPanel
           activeTab={activeInspectorTab}
@@ -1986,51 +2911,87 @@ function App() {
           onRenameTemplate={() => void renameTemplate()}
           onDeleteTemplate={() => void deleteTemplate()}
           onTemplateContextMenu={handleTemplateContextMenu}
+          isBottomDocked={
+            inspectorLayout.isDocked && inspectorLayout.zone === "dock-bottom"
+          }
         />
       </FloatingPanel>
-    )
-  }
+    );
+  };
 
   const renderInfoPanel = (isOnlyInColumn = true, isLastInColumn = false) => {
-    if (selectedItems.length === 0) return null
+    if (selectedItems.length === 0) return null;
     return (
       <FloatingInfoPanel
         items={selectedItems}
         copyNotice={fipCopyNotice}
         workspaceRef={shellRef}
         layout={infoPanelLayout}
-        onLayoutChange={(next) => handlePanelLayoutChange('info-panel', next)}
+        onLayoutChange={(next) => handlePanelLayoutChange("info-panel", next)}
         isOnlyInColumn={isOnlyInColumn}
         isLastInColumn={isLastInColumn}
+        reservedBottomSpace={bottomDockHeight}
+        allowBottomDock={
+          bottomDockOccupantId === null || bottomDockOccupantId === "info-panel"
+        }
         onCopyAll={() => {
-          void navigator.clipboard.writeText(
-            selectedItems.map((i) => i.agentReference).join('\n')
-          ).then(() => {
-            setFipCopyNotice('All references copied')
-            setTimeout(() => setFipCopyNotice(''), 1800)
-          })
+          void navigator.clipboard
+            .writeText(selectedItems.map((i) => i.agentReference).join("\n"))
+            .then(() => {
+              setFipCopyNotice("All references copied");
+              setTimeout(() => setFipCopyNotice(""), 1800);
+            });
         }}
         onCopyItem={(ref) => {
           void navigator.clipboard.writeText(ref).then(() => {
-            setFipCopyNotice('Copied')
-            setTimeout(() => setFipCopyNotice(''), 1800)
-          })
+            setFipCopyNotice("Copied");
+            setTimeout(() => setFipCopyNotice(""), 1800);
+          });
         }}
       />
-    )
-  }
+    );
+  };
 
-  const renderDockZone = (zone: 'dock-left' | 'dock-right' | 'dock-bottom') => {
-    const panels: { id: string; layout: PanelLayout; render: (isOnly: boolean, isLast?: boolean) => React.ReactNode }[] = []
-    
-    if (sidebarLayout.isDocked && sidebarLayout.visible && sidebarLayout.zone === zone) {
-      panels.push({ id: 'sidebar', layout: sidebarLayout, render: renderSidebar })
+  const renderDockZone = (zone: "dock-left" | "dock-right" | "dock-bottom") => {
+    const panels: {
+      id: string;
+      layout: PanelLayout;
+      render: (isOnly: boolean, isLast?: boolean) => React.ReactNode;
+    }[] = [];
+
+    if (
+      sidebarLayout.isDocked &&
+      sidebarLayout.visible &&
+      sidebarLayout.zone === zone
+    ) {
+      panels.push({
+        id: "sidebar",
+        layout: sidebarLayout,
+        render: renderSidebar,
+      });
     }
-    if (inspectorLayout.isDocked && inspectorLayout.visible && inspectorLayout.zone === zone) {
-      panels.push({ id: 'inspector', layout: inspectorLayout, render: renderInspector })
+    if (
+      inspectorLayout.isDocked &&
+      inspectorLayout.visible &&
+      inspectorLayout.zone === zone
+    ) {
+      panels.push({
+        id: "inspector",
+        layout: inspectorLayout,
+        render: renderInspector,
+      });
     }
-    if (infoPanelLayout.isDocked && infoPanelLayout.visible && selectedItems.length > 0 && infoPanelLayout.zone === zone) {
-      panels.push({ id: 'info-panel', layout: infoPanelLayout, render: renderInfoPanel })
+    if (
+      infoPanelLayout.isDocked &&
+      infoPanelLayout.visible &&
+      selectedItems.length > 0 &&
+      infoPanelLayout.zone === zone
+    ) {
+      panels.push({
+        id: "info-panel",
+        layout: infoPanelLayout,
+        render: renderInfoPanel,
+      });
     }
 
     // Keep columns 0, 1, 2 permanently mounted to support smooth flexbox width transitions
@@ -2038,64 +2999,66 @@ function App() {
       0: [],
       1: [],
       2: [],
-    }
+    };
     for (const p of panels) {
-      const col = p.layout.dockColumn ?? 0
-      if (!columns[col]) columns[col] = []
-      columns[col].push(p)
+      const col = p.layout.dockColumn ?? 0;
+      if (!columns[col]) columns[col] = [];
+      columns[col].push(p);
     }
 
     const colKeys = Object.keys(columns)
       .map(Number)
-      .sort((a, b) => a - b)
+      .sort((a, b) => a - b);
 
     // Calculate total size for smooth CSS transitions
-    let totalW = 0
-    let totalH = 0
+    let totalW = 0;
+    let totalH = 0;
 
-    if (zone === 'dock-left' || zone === 'dock-right') {
+    if (zone === "dock-left" || zone === "dock-right") {
       for (const colKey of colKeys) {
-        const colPanels = columns[colKey]
+        const colPanels = columns[colKey];
         if (colPanels.length > 0) {
-          const w = colPanels[0]?.layout.w ?? 240
-          totalW += w
+          const w = colPanels[0]?.layout.w ?? 240;
+          totalW += w;
         }
       }
-    } else if (zone === 'dock-bottom') {
-      let maxColH = 0
+    } else if (zone === "dock-bottom") {
+      let maxColH = 0;
       for (const colKey of colKeys) {
-        const colPanels = columns[colKey]
+        const colPanels = columns[colKey];
         if (colPanels.length > 0) {
-          let colH = 0
+          let colH = 0;
           for (const p of colPanels) {
-            colH += p.layout.minimized ? 32 : p.layout.h
+            colH += p.layout.minimized ? 32 : p.layout.h;
           }
           if (colH > maxColH) {
-            maxColH = colH
+            maxColH = colH;
           }
         }
       }
-      totalH = maxColH
+      totalH = maxColH;
     }
 
     // Set inline styles depending on zone
-    const containerStyle: React.CSSProperties = {}
-    if (zone === 'dock-left' || zone === 'dock-right') {
-      containerStyle.width = `${totalW}px`
-    } else if (zone === 'dock-bottom') {
-      containerStyle.height = `${totalH}px`
+    const containerStyle: React.CSSProperties = {};
+    if (zone === "dock-left" || zone === "dock-right") {
+      containerStyle.width = `${totalW}px`;
+    } else if (zone === "dock-bottom") {
+      containerStyle.height = `${totalH}px`;
     }
 
-    const populatedCols = colKeys.filter((colKey) => columns[colKey].length > 0)
-    const isOnlyCol = populatedCols.length === 1
+    const populatedCols = colKeys.filter(
+      (colKey) => columns[colKey].length > 0,
+    );
+    const isOnlyCol = populatedCols.length === 1;
 
     return (
-      <div 
-        className={`dock-zone-content dock-zone-content--${zone} ${panels.length === 0 ? 'dock-zone-content--empty' : ''}`}
+      <div
+        className={`dock-zone-content dock-zone-content--${zone} ${panels.length === 0 ? "dock-zone-content--empty" : ""}`}
         style={containerStyle}
       >
         {colKeys.map((colKey) => {
-          const colPanels = columns[colKey]
+          const colPanels = columns[colKey];
 
           if (colPanels.length === 0) {
             return (
@@ -2104,86 +3067,121 @@ function App() {
                 className="dock-column dock-column--empty"
                 style={{
                   width: 0,
-                  overflow: 'hidden',
-                  flex: '0 0 auto',
-                  height: '100%',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  transition: 'width 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+                  overflow: "hidden",
+                  flex: "0 0 auto",
+                  height: "100%",
+                  display: "flex",
+                  flexDirection: "column",
+                  transition: "width 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
                 }}
                 data-dock-column={colKey}
               />
-            )
+            );
           }
 
-          colPanels.sort((a, b) => (a.layout.dockRow ?? 0) - (b.layout.dockRow ?? 0))
+          colPanels.sort(
+            (a, b) => (a.layout.dockRow ?? 0) - (b.layout.dockRow ?? 0),
+          );
 
-          const firstPanel = colPanels[0]
-          const w = firstPanel?.layout.w ?? 240
+          const firstPanel = colPanels[0];
+          const w = firstPanel?.layout.w ?? 240;
 
-          const colStyle: React.CSSProperties = zone === 'dock-bottom'
-            ? isOnlyCol
-              ? { width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }
-              : { width: w, flex: '0 0 auto', height: '100%', display: 'flex', flexDirection: 'column', transition: 'width 0.2s cubic-bezier(0.16, 1, 0.3, 1)' }
-            : { width: w, flex: '0 0 auto', height: '100%', display: 'flex', flexDirection: 'column', transition: 'width 0.2s cubic-bezier(0.16, 1, 0.3, 1)' }
+          const colStyle: React.CSSProperties =
+            zone === "dock-bottom"
+              ? isOnlyCol
+                ? {
+                    width: "100%",
+                    height: "100%",
+                    display: "flex",
+                    flexDirection: "column",
+                  }
+                : {
+                    width: w,
+                    flex: "0 0 auto",
+                    height: "100%",
+                    display: "flex",
+                    flexDirection: "column",
+                    transition: "width 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
+                  }
+              : {
+                  width: w,
+                  flex: "0 0 auto",
+                  height: "100%",
+                  display: "flex",
+                  flexDirection: "column",
+                  transition: "width 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
+                };
 
           return (
-            <div key={colKey} className="dock-column" style={colStyle} data-dock-column={colKey}>
+            <div
+              key={colKey}
+              className="dock-column"
+              style={colStyle}
+              data-dock-column={colKey}
+            >
               {colPanels.map((p) => {
-                const isOnly = colPanels.length === 1
-                const h = p.layout.h
+                const isOnly = colPanels.length === 1;
+                const h = p.layout.h;
 
                 const placeholderStyle: React.CSSProperties = {
-                  width: '100%',
-                  height: p.layout.minimized ? '32px' : (isOnly ? '100%' : 'auto'),
-                  flex: p.layout.minimized ? '0 0 auto' : (isOnly ? '1 1 auto' : `${h} ${h} 0%`),
-                  minHeight: p.layout.minimized ? '32px' : '100px',
-                }
+                  width: "100%",
+                  height: p.layout.minimized
+                    ? "32px"
+                    : isOnly
+                      ? "100%"
+                      : "auto",
+                  flex: p.layout.minimized
+                    ? "0 0 auto"
+                    : isOnly
+                      ? "1 1 auto"
+                      : `${h} ${h} 0%`,
+                  minHeight: p.layout.minimized ? "32px" : "100px",
+                };
 
                 return (
                   <div
                     key={p.id}
                     id={`placeholder-${p.id}`}
-                    className={`dock-placeholder ${p.layout.minimized ? 'dock-placeholder--minimized' : ''}`}
+                    className={`dock-placeholder ${p.layout.minimized ? "dock-placeholder--minimized" : ""}`}
                     style={placeholderStyle}
                   />
-                )
+                );
               })}
             </div>
-          )
+          );
         })}
       </div>
-    )
-  }
+    );
+  };
 
   return (
     <main
       ref={shellRef}
-      className={`app-shell ${zenMode ? 'zen-mode' : ''} ${topbarMaximized ? 'topbar-maximized' : ''} ${
-        activeView === 'editor' && openDocIds.length > 0 ? 'has-tab-bar' : ''
+      className={`app-shell ${zenMode ? "zen-mode" : ""} ${topbarMaximized ? "topbar-maximized" : ""} ${
+        activeView === "editor" && openDocIds.length > 0 ? "has-tab-bar" : ""
       }`}
-      style={{
-        '--sidebar-width': `${leftDockWidth}px`,
-        '--inspector-width': `${rightDockWidth}px`,
-        '--topbar-left-width': `${Math.max(200, leftDockWidth)}px`,
-      } as React.CSSProperties}
+      style={
+        {
+          "--sidebar-width": `${leftDockWidth}px`,
+          "--inspector-width": `${rightDockWidth}px`,
+          "--topbar-left-width": `${Math.max(200, leftDockWidth)}px`,
+        } as React.CSSProperties
+      }
     >
       {/* ── macOS WINDOW HEADER / TITLEBAR ──────────────────── */}
-      <header className="topbar" onDoubleClick={() => setTopbarMaximized((prev) => !prev)}>
-
-
-
-
-
+      <header
+        className="topbar"
+        onDoubleClick={() => setTopbarMaximized((prev) => !prev)}
+      >
         {/* Native menu bar (Item 13) */}
         <div className="menu-bar" ref={menuBarRef}>
           {menuBarData.map((menu) => {
-            const isOpen = activeMenu === menu.name
+            const isOpen = activeMenu === menu.name;
             return (
-              <div key={menu.name} style={{ position: 'relative' }}>
+              <div key={menu.name} style={{ position: "relative" }}>
                 <button
                   type="button"
-                  className={`menu-bar-btn ${isOpen ? 'menu-bar-btn--active' : ''}`}
+                  className={`menu-bar-btn ${isOpen ? "menu-bar-btn--active" : ""}`}
                   onMouseDown={(e) => handleMenuMouseDown(menu.name, e)}
                   onMouseEnter={(e) => handleMenuMouseEnter(menu.name, e)}
                 >
@@ -2198,18 +3196,22 @@ function App() {
                   />
                 )}
               </div>
-            )
+            );
           })}
         </div>
 
         <div className="document-identity">
           <div className="document-identity-wrapper">
-            <span className={`document-dirty-dot ${hasUnsavedChanges ? 'document-dirty-dot--active' : ''}`} title="Unsaved changes" />
-            <strong>{activeDocument?.name || 'No document selected'}</strong>
+            <span
+              className={`document-dirty-dot ${hasUnsavedChanges ? "document-dirty-dot--active" : ""}`}
+              title="Unsaved changes"
+            />
+            <strong>{activeDocument?.name || "No document selected"}</strong>
           </div>
           <span>
-            {activeDocument?.relativePath || 'Select a document below'}
-            {activeDocument && ` · ${settings.pageSizePreset} ${settings.orientation.toUpperCase()}`}
+            {activeDocument?.relativePath || "Select a document below"}
+            {activeDocument &&
+              ` · ${settings.pageSizePreset} ${settings.orientation.toUpperCase()}`}
           </span>
         </div>
 
@@ -2217,23 +3219,23 @@ function App() {
           <div className="segmented-control">
             <button
               type="button"
-              className={`segment-btn ${selectorEnabled ? 'segment-btn--active' : ''}`}
+              className={`segment-btn ${selectorEnabled ? "segment-btn--active" : ""}`}
               title="Select mode (Precision Selector)"
               onClick={() => {
-                setSelectorEnabled(true)
-                setActiveInspectorTab('selection')
-                setInspectorLayout((prev) => ({ ...prev, visible: true }))
+                setSelectorEnabled(true);
+                setActiveInspectorTab("selection");
+                setInspectorLayout((prev) => ({ ...prev, visible: true }));
               }}
             >
               <MousePointer2 size={12} />
             </button>
             <button
               type="button"
-              className={`segment-btn ${!selectorEnabled ? 'segment-btn--active' : ''}`}
+              className={`segment-btn ${!selectorEnabled ? "segment-btn--active" : ""}`}
               title="Preview mode"
               onClick={() => {
-                setSelectorEnabled(false)
-                setActiveInspectorTab('document')
+                setSelectorEnabled(false);
+                setActiveInspectorTab("document");
               }}
             >
               <Eye size={12} />
@@ -2245,7 +3247,7 @@ function App() {
           <div className="segmented-control">
             <button
               type="button"
-              className={`segment-btn segment-btn--primary ${hasUnsavedChanges ? 'dirty' : ''} ${saveBtnFlash ? 'save-success' : ''}`}
+              className={`segment-btn segment-btn--primary ${hasUnsavedChanges ? "dirty" : ""} ${saveBtnFlash ? "save-success" : ""}`}
               disabled={busy || !hasUnsavedChanges}
               onClick={saveChanges}
               title="Save changes (Cmd+S)"
@@ -2289,56 +3291,64 @@ function App() {
 
           <div className="toolbar-divider" />
 
-          <IconButton title="Refresh documents" disabled={busy} onClick={() => void refreshDocuments()}>
+          <IconButton
+            title="Refresh documents"
+            disabled={busy}
+            onClick={() => void refreshDocuments()}
+          >
             <RefreshCw size={12} />
           </IconButton>
 
           <IconButton
             title="Component Library"
-            active={activeView === 'library'}
-            onClick={() => setActiveView(activeView === 'library' ? 'editor' : 'library')}
+            active={activeView === "library"}
+            onClick={() =>
+              setActiveView(activeView === "library" ? "editor" : "library")
+            }
           >
             <Library size={12} />
           </IconButton>
-
-
         </div>
       </header>
 
-
-
       {/* ── WORKSPACE GRID ──────────────────────────────────── */}
       <div
-        className={`workspace-grid ${(!sidebarLayout.isDocked || !sidebarLayout.visible) ? 'grid--no-sidebar' : ''} ${(!inspectorLayout.isDocked || !inspectorLayout.visible || activeView !== 'editor') ? 'grid--no-inspector' : ''}`}
+        className={`workspace-grid ${!sidebarLayout.isDocked || !sidebarLayout.visible ? "grid--no-sidebar" : ""} ${!inspectorLayout.isDocked || !inspectorLayout.visible || activeView !== "editor" ? "grid--no-inspector" : ""}`}
       >
-        {activeView === 'editor' && (
+        {activeView === "editor" && (
           <>
             {/* Left Dock Container */}
             <div className="dock-container dock-container--left">
-              {renderDockZone('dock-left')}
+              {renderDockZone("dock-left")}
             </div>
 
             {/* ── CANVAS ─────────────────────────────────────────── */}
-            <section className="canvas-column" ref={canvasRef} onContextMenu={handleCanvasContextMenu}>
+            <section
+              className="canvas-column"
+              ref={canvasRef}
+              onContextMenu={handleCanvasContextMenu}
+            >
               {/* Document Tab Bar (Item 24) */}
               {openDocIds.length > 0 && (
                 <div className="document-tab-bar">
                   <div className="document-tab-bar-scroll">
                     {openDocIds.map((docId) => {
-                      const doc = documents.find((d) => d.id === docId)
-                      if (!doc) return null
-                      const isActive = activeDocument?.id === docId
+                      const doc = documents.find((d) => d.id === docId);
+                      if (!doc) return null;
+                      const isActive = activeDocument?.id === docId;
 
                       return (
                         <div
                           key={docId}
-                          className={`document-tab ${isActive ? 'document-tab--active' : ''}`}
+                          className={`document-tab ${isActive ? "document-tab--active" : ""}`}
                           onClick={() => void openDocument(docId)}
                           onContextMenu={(e) => handleTabContextMenu(e, docId)}
                         >
                           <FileText size={11} className="document-tab__icon" />
                           <span className="document-tab__name">{doc.name}</span>
-                          {hasUnsavedChanges && isActive && <span className="document-tab__dirty-dot" />}
+                          {hasUnsavedChanges && isActive && (
+                            <span className="document-tab__dirty-dot" />
+                          )}
                           <button
                             type="button"
                             className="document-tab__close-btn"
@@ -2347,7 +3357,7 @@ function App() {
                             ×
                           </button>
                         </div>
-                      )
+                      );
                     })}
                   </div>
                 </div>
@@ -2356,23 +3366,30 @@ function App() {
               {/* Breadcrumbs (Item 23) */}
               <div className="canvas-breadcrumbs">
                 <span className="breadcrumb-file">
-                  {activeDocument?.relativePath || 'No document selected'}
+                  {activeDocument?.relativePath || "No document selected"}
                 </span>
-                {ancestors.length > 0 && <span className="breadcrumb-divider">&gt;</span>}
+                {ancestors.length > 0 && (
+                  <span className="breadcrumb-divider">&gt;</span>
+                )}
                 {ancestors.map((ancestor, index) => (
-                  <span key={`${ancestor.path}-${index}`} className="breadcrumb-item-wrapper">
+                  <span
+                    key={`${ancestor.path}-${index}`}
+                    className="breadcrumb-item-wrapper"
+                  >
                     <button
                       type="button"
                       className="breadcrumb-item"
                       onClick={() => {
                         if (frameRef.current) {
-                          frameRef.current.selectElementByPath(ancestor.path)
+                          frameRef.current.selectElementByPath(ancestor.path);
                         }
                       }}
                     >
                       {ancestor.tag}
                     </button>
-                    {index < ancestors.length - 1 && <span className="breadcrumb-divider">&gt;</span>}
+                    {index < ancestors.length - 1 && (
+                      <span className="breadcrumb-divider">&gt;</span>
+                    )}
                   </span>
                 ))}
               </div>
@@ -2390,44 +3407,52 @@ function App() {
                   onSelectionChange={handleSelectionChange}
                   onFrameContextMenu={handleFrameContextMenu}
                   onElementEdit={handleElementEdit}
-                  shellClassName={selectorEnabled ? 'document-frame-shell--select' : 'document-frame-shell--preview'}
+                  shellClassName={
+                    selectorEnabled
+                      ? "document-frame-shell--select"
+                      : "document-frame-shell--preview"
+                  }
                 />
 
                 {/* Bottom Dock Container */}
                 <div className="dock-container dock-container--bottom">
-                  {renderDockZone('dock-bottom')}
+                  {renderDockZone("dock-bottom")}
                 </div>
               </div>
             </section>
 
             {/* Right Dock Container */}
             <div className="dock-container dock-container--right">
-              {renderDockZone('dock-right')}
+              {renderDockZone("dock-right")}
             </div>
 
             {/* Fixed overlay panels (automatically aligned to placeholders when docked) */}
-            {sidebarLayout.visible && renderSidebar(
-              getPanelStackFlags('sidebar').isOnlyInColumn,
-              getPanelStackFlags('sidebar').isLastInColumn
-            )}
-            {inspectorLayout.visible && renderInspector(
-              getPanelStackFlags('inspector').isOnlyInColumn,
-              getPanelStackFlags('inspector').isLastInColumn
-            )}
-            {infoPanelLayout.visible && selectedItems.length > 0 && renderInfoPanel(
-              getPanelStackFlags('info-panel').isOnlyInColumn,
-              getPanelStackFlags('info-panel').isLastInColumn
-            )}
+            {sidebarLayout.visible &&
+              renderSidebar(
+                getPanelStackFlags("sidebar").isOnlyInColumn,
+                getPanelStackFlags("sidebar").isLastInColumn,
+              )}
+            {inspectorLayout.visible &&
+              renderInspector(
+                getPanelStackFlags("inspector").isOnlyInColumn,
+                getPanelStackFlags("inspector").isLastInColumn,
+              )}
+            {infoPanelLayout.visible &&
+              selectedItems.length > 0 &&
+              renderInfoPanel(
+                getPanelStackFlags("info-panel").isOnlyInColumn,
+                getPanelStackFlags("info-panel").isLastInColumn,
+              )}
           </>
         )}
 
-        {activeView === 'library' && renderLibraryScreen()}
-        {activeView === 'settings' && renderSettingsScreen()}
+        {activeView === "library" && renderLibraryScreen()}
+        {activeView === "settings" && renderSettingsScreen()}
       </div>
 
       {/* Frosted Status Bar Footer */}
       <footer
-        className={`footer-status-bar ${!footerVisible ? 'footer-status-bar--hidden' : ''}`}
+        className={`footer-status-bar ${!footerVisible ? "footer-status-bar--hidden" : ""}`}
         onMouseEnter={() => setFooterVisible(true)}
       >
         <div className="footer-status-left">
@@ -2440,9 +3465,7 @@ function App() {
             </span>
           )}
           {pendingCount > 0 && (
-            <span className="footer-pending-badge">
-              {pendingCount} pending
-            </span>
+            <span className="footer-pending-badge">{pendingCount} pending</span>
           )}
         </div>
       </footer>
@@ -2471,19 +3494,22 @@ function App() {
           confirmText={dialogConfig.confirmText}
           cancelText={dialogConfig.cancelText}
           onConfirm={(val) => {
-            dialogConfig.onConfirm(val)
-            setDialogConfig(null)
+            dialogConfig.onConfirm(val);
+            setDialogConfig(null);
           }}
           onCancel={() => {
-            dialogConfig.onCancel()
-            setDialogConfig(null)
+            dialogConfig.onCancel();
+            setDialogConfig(null);
           }}
         />
       )}
 
       {/* Command Palette Overlay (Item 22) */}
       {showCommandPalette && (
-        <div className="palette-overlay" onClick={() => setShowCommandPalette(false)}>
+        <div
+          className="palette-overlay"
+          onClick={() => setShowCommandPalette(false)}
+        >
           <div className="palette-window" onClick={(e) => e.stopPropagation()}>
             <div className="palette-search-wrapper">
               <Search size={16} className="palette-search-icon" />
@@ -2493,8 +3519,8 @@ function App() {
                 placeholder="Type a command or search documents..."
                 value={commandSearch}
                 onChange={(e) => {
-                  setCommandSearch(e.target.value)
-                  setPaletteIndex(0)
+                  setCommandSearch(e.target.value);
+                  setPaletteIndex(0);
                 }}
                 onKeyDown={handlePaletteKeyDown}
                 autoFocus
@@ -2506,18 +3532,24 @@ function App() {
                   <button
                     key={idx}
                     type="button"
-                    className={`palette-result-row ${idx === paletteIndex ? 'palette-result-row--active' : ''}`}
+                    className={`palette-result-row ${idx === paletteIndex ? "palette-result-row--active" : ""}`}
                     onClick={() => {
-                      cmd.action()
-                      setShowCommandPalette(false)
-                      setCommandSearch('')
+                      cmd.action();
+                      setShowCommandPalette(false);
+                      setCommandSearch("");
                     }}
                   >
                     <div className="palette-result-left">
-                      <span className="palette-result-category">{cmd.category}</span>
+                      <span className="palette-result-category">
+                        {cmd.category}
+                      </span>
                       <span className="palette-result-label">{cmd.label}</span>
                     </div>
-                    {cmd.shortcut && <span className="palette-result-shortcut">{cmd.shortcut}</span>}
+                    {cmd.shortcut && (
+                      <span className="palette-result-shortcut">
+                        {cmd.shortcut}
+                      </span>
+                    )}
                   </button>
                 ))
               ) : (
@@ -2531,7 +3563,11 @@ function App() {
       {/* Zen Mode Exit Pill (Item 97) */}
       {zenMode && (
         <div className="zen-exit-pill-container">
-          <button type="button" className="zen-exit-pill" onClick={() => setZenMode(false)}>
+          <button
+            type="button"
+            className="zen-exit-pill"
+            onClick={() => setZenMode(false)}
+          >
             Exit Zen Mode <kbd style={{ marginLeft: 6 }}>⌘.</kbd>
           </button>
         </div>
@@ -2554,154 +3590,192 @@ function App() {
         />
       )}
     </main>
-  )
+  );
 }
 
-function mergeEdits(existing: ElementEdit | undefined, incoming: ElementEdit): ElementEdit {
+function mergeEdits(
+  existing: ElementEdit | undefined,
+  incoming: ElementEdit,
+): ElementEdit {
   return {
     targetPath: incoming.targetPath,
     styles: { ...(existing?.styles || {}), ...(incoming.styles || {}) },
-    attributes: { ...(existing?.attributes || {}), ...(incoming.attributes || {}) },
+    attributes: {
+      ...(existing?.attributes || {}),
+      ...(incoming.attributes || {}),
+    },
     textContent: incoming.textContent ?? existing?.textContent,
-  }
+  };
 }
 
-
-
-const PADDING = 6
-const TOPBAR_H = 36
-const FOOTER_H = 16
+const PADDING = 6;
+const TOPBAR_H = 36;
+const FOOTER_H = 16;
 
 function pushFloatingPanel(
   l: PanelLayout,
   leftW: number,
   rightW: number,
-  bottomH: number
+  bottomH: number,
 ): PanelLayout {
-  if (l.isDocked || !l.visible || l.maximized) return l
+  if (l.isDocked || !l.visible || l.maximized) return l;
 
-  const next = { ...l }
-  const leftBoundary = leftW + PADDING
-  const rightBoundary = window.innerWidth - rightW - PADDING
-  const bottomBoundary = window.innerHeight - bottomH - PADDING - FOOTER_H
+  const next = { ...l };
+  const leftBoundary = leftW + PADDING;
+  const rightBoundary = window.innerWidth - rightW - PADDING;
+  const bottomBoundary = window.innerHeight - bottomH - PADDING - FOOTER_H;
 
   // Push right if overlapping left dock
   if (next.x < leftBoundary) {
-    next.x = leftBoundary
+    next.x = leftBoundary;
   }
 
   // Push left if overlapping right dock
   if (next.x + next.w > rightBoundary) {
-    next.x = Math.max(leftBoundary, rightBoundary - next.w)
+    next.x = Math.max(leftBoundary, rightBoundary - next.w);
   }
 
   // Push up if overlapping bottom dock
   if (next.y + next.h > bottomBoundary) {
-    const minLimitY = TOPBAR_H + PADDING
-    next.y = Math.max(minLimitY, bottomBoundary - next.h)
+    const minLimitY = TOPBAR_H + PADDING;
+    next.y = Math.max(minLimitY, bottomBoundary - next.h);
   }
 
-  return next
+  return next;
 }
 
 function normalizeDockLayouts(
   sidebar: PanelLayout,
   inspector: PanelLayout,
-  info: PanelLayout
+  info: PanelLayout,
+  isInfoActive: boolean,
 ): { sidebar: PanelLayout; inspector: PanelLayout; info: PanelLayout } {
   const next = {
     sidebar: { ...sidebar },
     inspector: { ...inspector },
-    info: { ...info }
-  }
+    info: { ...info },
+  };
 
-  const zones: ('dock-left' | 'dock-right' | 'dock-bottom')[] = ['dock-left', 'dock-right', 'dock-bottom']
+  const isVisible = (name: string, l: PanelLayout) => {
+    if (name === "info") return l.visible && isInfoActive;
+    return l.visible;
+  };
+
+  const zones: ("dock-left" | "dock-right" | "dock-bottom")[] = [
+    "dock-left",
+    "dock-right",
+    "dock-bottom",
+  ];
 
   for (const zone of zones) {
-    const docked = Object.entries(next).filter(
-      ([, l]) => l.isDocked && l.zone === zone && l.visible
-    )
+    let docked = Object.entries(next).filter(
+      ([name, l]) => l.isDocked && l.zone === zone && isVisible(name, l),
+    );
 
-    if (docked.length === 0) continue
+    if (docked.length === 0) continue;
 
-    const columns: Record<number, typeof docked> = {}
+    if (zone === "dock-bottom" && docked.length > 1) {
+      const sortedDocked = [...docked].sort((a, b) => {
+        const colDiff = (a[1].dockColumn ?? 0) - (b[1].dockColumn ?? 0);
+        if (colDiff !== 0) return colDiff;
+        return (a[1].dockRow ?? 0) - (b[1].dockRow ?? 0);
+      });
+      const [keeper, ...extras] = sortedDocked;
+      for (const [name] of extras) {
+        const key = name as "sidebar" | "inspector" | "info";
+        next[key] = {
+          ...next[key],
+          isDocked: false,
+          zone: "free",
+        };
+      }
+      docked = [keeper];
+    }
+
+    const columns: Record<number, typeof docked> = {};
     for (const item of docked) {
-      const col = item[1].dockColumn ?? 0
-      if (!columns[col]) columns[col] = []
-      columns[col].push(item)
+      const col = item[1].dockColumn ?? 0;
+      if (!columns[col]) columns[col] = [];
+      columns[col].push(item);
     }
 
     const sortedColKeys = Object.keys(columns)
       .map(Number)
-      .sort((a, b) => a - b)
+      .sort((a, b) => a - b);
 
     sortedColKeys.forEach((colKey, colIdx) => {
-      const colItems = columns[colKey]
-      colItems.sort((a, b) => (a[1].dockRow ?? 0) - (b[1].dockRow ?? 0))
+      const colItems = columns[colKey];
+      colItems.sort((a, b) => (a[1].dockRow ?? 0) - (b[1].dockRow ?? 0));
       colItems.forEach((item, rowIdx) => {
-        const pName = item[0] as 'sidebar' | 'inspector' | 'info'
-        next[pName].dockColumn = colIdx
-        next[pName].dockRow = rowIdx
-      })
-    })
+        const pName = item[0] as "sidebar" | "inspector" | "info";
+        next[pName].dockColumn = colIdx;
+        next[pName].dockRow = rowIdx;
+        if (zone === "dock-bottom") {
+          next[pName].h = BOTTOM_DOCK_HEIGHT;
+        }
+      });
+    });
   }
+
+  const getVisibleDocked = (
+    zone: "dock-left" | "dock-right" | "dock-bottom",
+  ) => {
+    return [
+      { id: "sidebar", layout: next.sidebar },
+      { id: "inspector", layout: next.inspector },
+      { id: "info", layout: next.info },
+    ]
+      .filter(
+        (p) =>
+          p.layout.isDocked &&
+          p.layout.zone === zone &&
+          isVisible(p.id, p.layout),
+      )
+      .map((p) => p.layout);
+  };
 
   // Calculate active dock zone dimensions to push floating windows
-  const leftPanels = [next.sidebar, next.inspector, next.info].filter(p => p.isDocked && p.zone === 'dock-left' && p.visible)
-  const rightPanels = [next.sidebar, next.inspector, next.info].filter(p => p.isDocked && p.zone === 'dock-right' && p.visible)
-  const bottomPanels = [next.sidebar, next.inspector, next.info].filter(p => p.isDocked && p.zone === 'dock-bottom' && p.visible)
+  const leftPanels = getVisibleDocked("dock-left");
+  const rightPanels = getVisibleDocked("dock-right");
 
   // Compute left dock width
-  const leftCols: Record<number, typeof leftPanels> = {}
+  const leftCols: Record<number, typeof leftPanels> = {};
   for (const p of leftPanels) {
-    const col = p.dockColumn ?? 0
-    if (!leftCols[col]) leftCols[col] = []
-    leftCols[col].push(p)
+    const col = p.dockColumn ?? 0;
+    if (!leftCols[col]) leftCols[col] = [];
+    leftCols[col].push(p);
   }
-  let leftW = 0
+  let leftW = 0;
   for (const colKey in leftCols) {
-    const colPanels = leftCols[colKey]
-    leftW += colPanels[0]?.w ?? 240
+    const colPanels = leftCols[colKey];
+    leftW += colPanels[0]?.w ?? 240;
   }
 
   // Compute right dock width
-  const rightCols: Record<number, typeof rightPanels> = {}
+  const rightCols: Record<number, typeof rightPanels> = {};
   for (const p of rightPanels) {
-    const col = p.dockColumn ?? 0
-    if (!rightCols[col]) rightCols[col] = []
-    rightCols[col].push(p)
+    const col = p.dockColumn ?? 0;
+    if (!rightCols[col]) rightCols[col] = [];
+    rightCols[col].push(p);
   }
-  let rightW = 0
+  let rightW = 0;
   for (const colKey in rightCols) {
-    const colPanels = rightCols[colKey]
-    rightW += colPanels[0]?.w ?? 240
+    const colPanels = rightCols[colKey];
+    rightW += colPanels[0]?.w ?? 240;
   }
 
-  // Compute bottom dock height
-  const bottomCols: Record<number, typeof bottomPanels> = {}
-  for (const p of bottomPanels) {
-    const col = p.dockColumn ?? 0
-    if (!bottomCols[col]) bottomCols[col] = []
-    bottomCols[col].push(p)
-  }
-  let bottomH = 0
-  for (const colKey in bottomCols) {
-    const colPanels = bottomCols[colKey]
-    let colH = 0
-    for (const p of colPanels) {
-      colH += p.minimized ? 32 : p.h
-    }
-    if (colH > bottomH) {
-      bottomH = colH
-    }
-  }
+  const bottomPanels = getVisibleDocked("dock-bottom");
+  const bottomH =
+    bottomPanels.length > 0
+      ? Math.max(...bottomPanels.map((p) => (p.minimized ? 32 : p.h)))
+      : 0;
 
-  // Push any floating panels away if they overlap
-  next.sidebar = pushFloatingPanel(next.sidebar, leftW, rightW, bottomH)
-  next.inspector = pushFloatingPanel(next.inspector, leftW, rightW, bottomH)
-  next.info = pushFloatingPanel(next.info, leftW, rightW, bottomH)
+  // Push any floating panels away from left/right docks
+  next.sidebar = pushFloatingPanel(next.sidebar, leftW, rightW, bottomH);
+  next.inspector = pushFloatingPanel(next.inspector, leftW, rightW, bottomH);
+  next.info = pushFloatingPanel(next.info, leftW, rightW, bottomH);
 
-  return next
+  return next;
 }
 
-export default App
+export default App;
