@@ -8,7 +8,7 @@
 import React, { useCallback, useRef, useState, useEffect } from "react";
 import { GripVertical, Minimize2, X, Maximize2 } from "lucide-react";
 
-export type SnapZone = "free" | "dock-left" | "dock-right" | "dock-bottom";
+export type SnapZone = "free" | "dock-left" | "dock-right";
 
 export interface PanelLayout {
   x: number;
@@ -40,8 +40,6 @@ interface FloatingPanelProps {
   minHeight?: number;
   isOnlyInColumn?: boolean;
   isLastInColumn?: boolean;
-  reservedBottomSpace?: number;
-  allowBottomDock?: boolean;
   children: React.ReactNode;
 }
 
@@ -50,9 +48,7 @@ const DRAG_THRESHOLD = 4; // px mouse must move before drag/resize activates
 const SNAP_DELAY = 150; // ms to wait before snapping a dragged panel
 const TOPBAR_H = 36; // topbar height in px
 const FOOTER_H = 16; // footer status bar height in px
-const TITLEBAR_H = 32; // titlebar height in px
 const PADDING = 6;
-export const BOTTOM_DOCK_HEIGHT = 448;
 
 const EDGE_CURSORS: Record<string, string> = {
   n: "n-resize",
@@ -92,13 +88,6 @@ function calcSnap(
         w: fallbackW || 280,
         h: ws.height - topOffset - bottomOffset - PADDING * 2,
       };
-    case "dock-bottom":
-      return {
-        x: ws.left + PADDING,
-        y: ws.top + ws.height - bottomOffset - BOTTOM_DOCK_HEIGHT - PADDING,
-        w: ws.width - PADDING * 2,
-        h: BOTTOM_DOCK_HEIGHT,
-      };
     default:
       return { x: fallbackX, y: fallbackY, w: fallbackW, h: fallbackH };
   }
@@ -116,8 +105,6 @@ export function FloatingPanel({
   minHeight = 100,
   isOnlyInColumn = true,
   isLastInColumn = false,
-  reservedBottomSpace = 0,
-  allowBottomDock = true,
   children,
 }: FloatingPanelProps) {
   const { x, y, w, h, isDocked, zone, minimized, visible } = layout;
@@ -149,8 +136,7 @@ export function FloatingPanel({
           window.innerHeight -
           TOPBAR_H -
           FOOTER_H -
-          PADDING * 2 -
-          reservedBottomSpace;
+          PADDING * 2;
         if (nextLayout.h > availableHeight) {
           nextLayout.h = Math.max(minHeight, availableHeight);
           if (nextLayout.h !== layout.h) corrected = true;
@@ -163,8 +149,7 @@ export function FloatingPanel({
           window.innerHeight -
           FOOTER_H -
           PADDING -
-          TITLEBAR_H -
-          reservedBottomSpace;
+          nextLayout.h;
 
         if (nextLayout.x < minLimitX || nextLayout.x > maxLimitX) {
           nextLayout.x = Math.max(minLimitX, Math.min(nextLayout.x, maxLimitX));
@@ -193,7 +178,6 @@ export function FloatingPanel({
     visible,
     isDocked,
     id,
-    reservedBottomSpace,
   ]);
 
   const [dockedRect, setDockedRect] = useState<{
@@ -333,15 +317,9 @@ export function FloatingPanel({
         relX > ws.width - SNAP_THRESHOLD
       )
         return "dock-right";
-      if (
-        allowedZones.includes("dock-bottom") &&
-        allowBottomDock &&
-        relY > ws.height - SNAP_THRESHOLD
-      )
-        return "dock-bottom";
       return null;
     },
-    [allowedZones, allowBottomDock],
+    [allowedZones],
   );
 
   // ── Drag title bar ──────────────────────────────────────────────────────────
@@ -432,7 +410,7 @@ export function FloatingPanel({
         const ws = el.getBoundingClientRect();
 
         const minLimitY = ws.top + TOPBAR_H + PADDING;
-        const maxLimitY = ws.top + ws.height - FOOTER_H - PADDING - TITLEBAR_H;
+        const maxLimitY = ws.top + ws.height - FOOTER_H - PADDING - currentH;
 
         const nx = Math.max(
           ws.left + PADDING,
@@ -936,113 +914,7 @@ export function FloatingPanel({
 
   if (!visible) return null;
 
-  const isBottomDocked = isDocked && zone === "dock-bottom";
-
   const renderTitleBar = () => {
-    if (isBottomDocked) {
-      return (
-        <div
-          className="fip-titlebar fip-titlebar--vertical"
-          onMouseDown={handleTitlebarMouseDown}
-          onDoubleClick={handleTitlebarDoubleClick}
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            width: "32px",
-            height: "100%",
-            borderBottom: "none",
-            borderRight: "1px solid var(--border-medium)",
-            padding: "8px 4px",
-            alignItems: "center",
-            justifyContent: "space-between",
-            background: "rgba(0, 0, 0, 0.12)",
-            flexShrink: 0,
-            cursor: "grab",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: "8px",
-              width: "100%",
-            }}
-          >
-            <GripVertical
-              size={11}
-              className="fip-grip"
-              style={{
-                transform: "rotate(90deg)",
-                opacity: 0.6,
-                cursor: "grab",
-              }}
-            />
-            <span
-              className="fip-title"
-              style={{
-                writingMode: "vertical-lr",
-                transform: "rotate(180deg)",
-                fontSize: "11px",
-                fontWeight: 600,
-                color: "var(--text-1)",
-                userSelect: "none",
-                marginTop: "12px",
-              }}
-            >
-              {title}
-            </span>
-          </div>
-
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: "6px",
-              width: "100%",
-              marginTop: "auto",
-            }}
-          >
-            <button
-              type="button"
-              className="fip-action-btn"
-              onClick={() =>
-                onLayoutChange({ ...layout, minimized: !minimized })
-              }
-              title={minimized ? "Expand" : "Minimize"}
-              style={{
-                width: "22px",
-                height: "22px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                padding: 0,
-              }}
-            >
-              {minimized ? <Maximize2 size={10} /> : <Minimize2 size={10} />}
-            </button>
-            <button
-              type="button"
-              className="fip-action-btn fip-action-btn--close"
-              onClick={() => onLayoutChange({ ...layout, visible: false })}
-              title="Close"
-              style={{
-                width: "22px",
-                height: "22px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                padding: 0,
-              }}
-            >
-              <X size={10} />
-            </button>
-          </div>
-        </div>
-      );
-    }
-
     return (
       <div
         className="fip-titlebar"
@@ -1113,8 +985,7 @@ export function FloatingPanel({
             : window.innerHeight -
               TOPBAR_H -
               FOOTER_H -
-              PADDING * 2 -
-              reservedBottomSpace,
+              PADDING * 2,
           zIndex: 900,
           transition: transitionStyle,
         }
@@ -1236,7 +1107,7 @@ export function FloatingPanel({
         style={{
           ...panelStyle,
           display: "flex",
-          flexDirection: isBottomDocked ? "row" : "column",
+          flexDirection: "column",
         }}
         data-panel-id={id}
         data-dock-zone={zone}
@@ -1251,7 +1122,7 @@ export function FloatingPanel({
             style={{
               flex: 1,
               display: "flex",
-              flexDirection: isBottomDocked ? "row" : "column",
+              flexDirection: "column",
               minHeight: 0,
               minWidth: 0,
               overflow: "hidden",

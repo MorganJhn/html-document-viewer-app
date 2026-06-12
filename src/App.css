@@ -4497,11 +4497,6 @@ body.fip-resizing .fip {
   height: 100%;
 }
 
-.dock-container--bottom {
-  flex-direction: column;
-  width: 100%;
-}
-
 .dock-zone-content {
   display: flex;
   flex: 1;
@@ -4514,12 +4509,6 @@ body.fip-resizing .fip {
 .dock-zone-content--dock-left,
 .dock-zone-content--dock-right {
   flex-direction: row;
-  height: 100%;
-}
-
-.dock-zone-content--dock-bottom {
-  flex-direction: row;
-  width: 100%;
   height: 100%;
 }
 
@@ -4562,21 +4551,6 @@ body.fip-resizing .fip {
 
 .fip--docked-dock-right {
   border-left: 1px solid var(--border-soft) !important;
-}
-
-.fip--docked-dock-bottom {
-  border-top: 1px solid var(--border-soft) !important;
-}
-
-/* Docked bottom north resizer override */
-.fip--docked .fip-resize--n {
-  top: 0;
-  bottom: auto !important;
-  left: 0;
-  right: 0;
-  height: 4px;
-  width: auto !important;
-  cursor: row-resize;
 }
 
 /* ============================================================

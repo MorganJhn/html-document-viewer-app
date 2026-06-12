@@ -47,7 +47,6 @@ import type {
 import { FloatingInfoPanel } from "./components/FloatingInfoPanel";
 import {
   FloatingPanel,
-  BOTTOM_DOCK_HEIGHT,
   type PanelLayout,
 } from "./components/FloatingPanel";
 
@@ -313,31 +312,6 @@ function App() {
     [sidebarLayout, inspectorLayout, adjustLayoutForAppearance],
   );
 
-  const bottomDockedPanels = useMemo(() => {
-    return [
-      { id: "sidebar", layout: sidebarLayout },
-      { id: "inspector", layout: inspectorLayout },
-      { id: "info-panel", layout: infoPanelLayout },
-    ].filter(
-      (panel) =>
-        panel.layout.isDocked &&
-        panel.layout.visible &&
-        panel.layout.zone === "dock-bottom" &&
-        (panel.id !== "info-panel" || selectedItems.length > 0),
-    );
-  }, [sidebarLayout, inspectorLayout, infoPanelLayout, selectedItems.length]);
-
-  const bottomDockHeight = useMemo(() => {
-    if (bottomDockedPanels.length === 0) return 0;
-    return Math.max(
-      ...bottomDockedPanels.map((panel) =>
-        panel.layout.minimized ? 32 : panel.layout.h,
-      ),
-    );
-  }, [bottomDockedPanels]);
-
-  const bottomDockOccupantId = bottomDockedPanels[0]?.id ?? null;
-
   const getPanelStackFlags = (panelId: string) => {
     const layout = getPanelLayout(panelId);
     if (!layout.isDocked || !layout.visible) {
@@ -404,21 +378,6 @@ function App() {
       const updates: Record<string, Partial<PanelLayout>> = {
         [id]: nextLayout,
       };
-
-      if (
-        zone === "dock-bottom" &&
-        bottomDockOccupantId &&
-        bottomDockOccupantId !== id
-      ) {
-        applyLayoutUpdates({
-          [id]: {
-            ...nextLayout,
-            isDocked: false,
-            zone: "free",
-          },
-        });
-        return;
-      }
 
       if (zone === "dock-left" || zone === "dock-right") {
         // Find panels in the same column
@@ -542,83 +501,6 @@ function App() {
               ...updates[pId],
               ...l,
               w: nextLayout.w,
-            };
-          }
-        }
-      }
-
-      if (zone === "dock-bottom") {
-        // Find panels in the same row
-        const rowPanels = [
-          { id: "sidebar", layout: sidebarLayout },
-          { id: "inspector", layout: inspectorLayout },
-          { id: "info-panel", layout: infoPanelLayout },
-        ].filter(
-          (p) =>
-            p.layout.isDocked &&
-            p.layout.zone === zone &&
-            p.layout.visible &&
-            (p.id !== "info-panel" || selectedItems.length > 0),
-        );
-
-        // Sort by dockColumn
-        rowPanels.sort(
-          (a, b) => (a.layout.dockColumn ?? 0) - (b.layout.dockColumn ?? 0),
-        );
-
-        // Find index of the panel being resized
-        const idx = rowPanels.findIndex((p) => p.id === id);
-
-        // If it is not the last panel, we resize it against the panel to its right
-        if (idx !== -1 && idx < rowPanels.length - 1) {
-          const currentPanel = rowPanels[idx];
-          const nextPanel = rowPanels[idx + 1];
-
-          const currentLayout = currentPanel.layout;
-          const nextLayoutObj = getPanelLayout(nextPanel.id);
-
-          const minWidthCurrent =
-            currentPanel.id === "sidebar"
-              ? 180
-              : currentPanel.id === "inspector"
-                ? 240
-                : 220;
-          const minWidthNext =
-            nextPanel.id === "sidebar"
-              ? 180
-              : nextPanel.id === "inspector"
-                ? 240
-                : 220;
-
-          let requestedW = Math.max(minWidthCurrent, nextLayout.w);
-          let diff = requestedW - currentLayout.w;
-
-          let newNextW = nextLayoutObj.w - diff;
-          if (newNextW < minWidthNext) {
-            newNextW = minWidthNext;
-            diff = nextLayoutObj.w - minWidthNext;
-            requestedW = currentLayout.w + diff;
-          }
-
-          updates[id] = { ...nextLayout, w: requestedW };
-          updates[nextPanel.id] = { ...nextLayoutObj, w: newNextW };
-        }
-
-        // Also synchronize the height across all panels in this row
-        const otherPanelIds = ["sidebar", "inspector", "info-panel"].filter(
-          (pId) => pId !== id,
-        );
-        for (const pId of otherPanelIds) {
-          const l = getPanelLayout(pId);
-          if (
-            l.isDocked &&
-            l.zone === zone &&
-            l.dockRow === nextLayout.dockRow
-          ) {
-            updates[pId] = {
-              ...updates[pId],
-              ...l,
-              h: nextLayout.h,
             };
           }
         }
@@ -2179,7 +2061,7 @@ function App() {
       ...prev,
       isDocked: true,
       maximized: false,
-      zone: "dock-bottom",
+      zone: "dock-right",
       dockColumn: 0,
       dockRow: 0,
     }));
@@ -2400,256 +2282,6 @@ function App() {
   ];
 
   const renderSidebar = (isOnlyInColumn = true, isLastInColumn = false) => {
-    const isBottom =
-      sidebarLayout.isDocked && sidebarLayout.zone === "dock-bottom";
-
-    if (isBottom) {
-      return (
-        <FloatingPanel
-          id="sidebar"
-          title="Navigator"
-          layout={sidebarLayout}
-          onLayoutChange={(next) => handlePanelLayoutChange("sidebar", next)}
-          allowedZones={["free", "dock-left", "dock-right", "dock-bottom"]}
-          workspaceRef={shellRef}
-          minWidth={180}
-          minHeight={100}
-          isOnlyInColumn={isOnlyInColumn}
-          isLastInColumn={isLastInColumn}
-          reservedBottomSpace={bottomDockHeight}
-          allowBottomDock={
-            bottomDockOccupantId === null || bottomDockOccupantId === "sidebar"
-          }
-        >
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "row",
-              alignItems: "center",
-              flex: 1,
-              minHeight: 0,
-              padding: "0 12px",
-              gap: 16,
-              height: "100%",
-              overflow: "hidden",
-            }}
-            onContextMenu={handleSidebarContextMenu}
-          >
-            {/* Views section */}
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 4,
-                flexShrink: 0,
-              }}
-            >
-              <span
-                className="section-title"
-                style={{
-                  fontSize: 9,
-                  fontWeight: 700,
-                  textTransform: "uppercase",
-                  opacity: 0.7,
-                }}
-              >
-                Views
-              </span>
-              <div
-                className="nav-list"
-                style={{ display: "flex", flexDirection: "row", gap: 4 }}
-              >
-                <button
-                  className={
-                    activeView === "editor"
-                      ? "nav-row nav-row--active"
-                      : "nav-row"
-                  }
-                  onClick={() => setActiveView("editor")}
-                  style={{ padding: "4px 10px", height: 26 }}
-                >
-                  <FileText size={11} />
-                  <span>Editor</span>
-                </button>
-                <button
-                  className={
-                    activeView === "library"
-                      ? "nav-row nav-row--active"
-                      : "nav-row"
-                  }
-                  onClick={() => setActiveView("library")}
-                  style={{ padding: "4px 10px", height: 26 }}
-                >
-                  <Library size={11} />
-                  <span>Library</span>
-                </button>
-                <button
-                  className={
-                    activeView === "settings"
-                      ? "nav-row nav-row--active"
-                      : "nav-row"
-                  }
-                  onClick={() => setActiveView("settings")}
-                  style={{ padding: "4px 10px", height: 26 }}
-                >
-                  <Sliders size={11} />
-                  <span>Preferences</span>
-                </button>
-              </div>
-            </div>
-
-            <div
-              style={{
-                width: 1,
-                height: "70%",
-                background: "var(--border-dim)",
-                flexShrink: 0,
-              }}
-            />
-
-            {/* Documents section */}
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 12,
-                flex: 1,
-                minWidth: 0,
-                height: "100%",
-                overflow: "hidden",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 4,
-                  flexShrink: 0,
-                  width: 140,
-                }}
-              >
-                <span
-                  className="section-title"
-                  style={{
-                    fontSize: 9,
-                    fontWeight: 700,
-                    textTransform: "uppercase",
-                    opacity: 0.7,
-                  }}
-                >
-                  Documents
-                </span>
-                <div
-                  className="search-input-wrapper input-clearable"
-                  style={{ marginTop: 0, height: 26, padding: "0 6px" }}
-                >
-                  <Search size={10} className="search-icon" />
-                  <input
-                    className="search-input"
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Search…"
-                    style={{ fontSize: 11 }}
-                  />
-                  {search && (
-                    <button
-                      type="button"
-                      className="input-clear-btn"
-                      onClick={() => setSearch("")}
-                      style={{ fontSize: 12 }}
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <HorizontalScrollContainer style={{ height: 36 }}>
-                <div
-                  className="document-list"
-                  style={{
-                    display: "flex",
-                    flexDirection: "row",
-                    gap: 6,
-                    alignItems: "center",
-                    padding: "0 4px",
-                  }}
-                >
-                  {filteredDocuments.map((document) => (
-                    <button
-                      type="button"
-                      key={document.id}
-                      className={
-                        activeDocument?.id === document.id
-                          ? "document-row document-row--active"
-                          : "document-row"
-                      }
-                      onClick={() => void openDocument(document.id)}
-                      onContextMenu={(e) =>
-                        handleDocumentContextMenu(e, document)
-                      }
-                      style={{
-                        flexShrink: 0,
-                        padding: "4px 12px",
-                        height: 28,
-                        display: "flex",
-                        alignItems: "center",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      <FileText size={11} style={{ marginRight: 6 }} />
-                      <span style={{ fontSize: 12 }}>{document.name}</span>
-                    </button>
-                  ))}
-                </div>
-              </HorizontalScrollContainer>
-            </div>
-
-            <div
-              style={{
-                width: 1,
-                height: "70%",
-                background: "var(--border-dim)",
-                flexShrink: 0,
-              }}
-            />
-
-            {/* Quick Actions Footer */}
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "row",
-                gap: 6,
-                flexShrink: 0,
-              }}
-            >
-              <button
-                type="button"
-                className="sidebar-footer-btn"
-                title="New Document"
-                onClick={() => setIsNewDocModalOpen(true)}
-                style={{ width: 28, height: 28, borderRadius: 6 }}
-              >
-                <Plus size={13} />
-              </button>
-              <button
-                type="button"
-                className="sidebar-footer-btn"
-                title="Refresh Documents"
-                onClick={() => {
-                  void refreshDocuments();
-                  toast("Refreshed document list", "success");
-                }}
-                style={{ width: 28, height: 28, borderRadius: 6 }}
-              >
-                <RefreshCw size={12} />
-              </button>
-            </div>
-          </div>
-        </FloatingPanel>
-      );
-    }
 
     return (
       <FloatingPanel
@@ -2657,7 +2289,7 @@ function App() {
         title="Navigator"
         layout={sidebarLayout}
         onLayoutChange={(next) => handlePanelLayoutChange("sidebar", next)}
-        allowedZones={["free", "dock-left", "dock-right", "dock-bottom"]}
+        allowedZones={["free", "dock-left", "dock-right"]}
         workspaceRef={shellRef}
         minWidth={180}
         minHeight={120}
@@ -2873,16 +2505,12 @@ function App() {
         title="Inspector"
         layout={inspectorLayout}
         onLayoutChange={(next) => handlePanelLayoutChange("inspector", next)}
-        allowedZones={["free", "dock-left", "dock-right", "dock-bottom"]}
+        allowedZones={["free", "dock-left", "dock-right"]}
         workspaceRef={shellRef}
         minWidth={240}
         minHeight={120}
         isOnlyInColumn={isOnlyInColumn}
         isLastInColumn={isLastInColumn}
-        reservedBottomSpace={bottomDockHeight}
-        allowBottomDock={
-          bottomDockOccupantId === null || bottomDockOccupantId === "inspector"
-        }
       >
         <InspectorPanel
           activeTab={activeInspectorTab}
@@ -2911,9 +2539,6 @@ function App() {
           onRenameTemplate={() => void renameTemplate()}
           onDeleteTemplate={() => void deleteTemplate()}
           onTemplateContextMenu={handleTemplateContextMenu}
-          isBottomDocked={
-            inspectorLayout.isDocked && inspectorLayout.zone === "dock-bottom"
-          }
         />
       </FloatingPanel>
     );
@@ -2930,10 +2555,6 @@ function App() {
         onLayoutChange={(next) => handlePanelLayoutChange("info-panel", next)}
         isOnlyInColumn={isOnlyInColumn}
         isLastInColumn={isLastInColumn}
-        reservedBottomSpace={bottomDockHeight}
-        allowBottomDock={
-          bottomDockOccupantId === null || bottomDockOccupantId === "info-panel"
-        }
         onCopyAll={() => {
           void navigator.clipboard
             .writeText(selectedItems.map((i) => i.agentReference).join("\n"))
@@ -2952,7 +2573,7 @@ function App() {
     );
   };
 
-  const renderDockZone = (zone: "dock-left" | "dock-right" | "dock-bottom") => {
+  const renderDockZone = (zone: "dock-left" | "dock-right") => {
     const panels: {
       id: string;
       layout: PanelLayout;
@@ -3022,29 +2643,12 @@ function App() {
           totalW += w;
         }
       }
-    } else if (zone === "dock-bottom") {
-      let maxColH = 0;
-      for (const colKey of colKeys) {
-        const colPanels = columns[colKey];
-        if (colPanels.length > 0) {
-          let colH = 0;
-          for (const p of colPanels) {
-            colH += p.layout.minimized ? 32 : p.layout.h;
-          }
-          if (colH > maxColH) {
-            maxColH = colH;
-          }
-        }
-      }
-      totalH = maxColH;
     }
 
     // Set inline styles depending on zone
     const containerStyle: React.CSSProperties = {};
     if (zone === "dock-left" || zone === "dock-right") {
       containerStyle.width = `${totalW}px`;
-    } else if (zone === "dock-bottom") {
-      containerStyle.height = `${totalH}px`;
     }
 
     const populatedCols = colKeys.filter(
@@ -3086,31 +2690,14 @@ function App() {
           const firstPanel = colPanels[0];
           const w = firstPanel?.layout.w ?? 240;
 
-          const colStyle: React.CSSProperties =
-            zone === "dock-bottom"
-              ? isOnlyCol
-                ? {
-                    width: "100%",
-                    height: "100%",
-                    display: "flex",
-                    flexDirection: "column",
-                  }
-                : {
-                    width: w,
-                    flex: "0 0 auto",
-                    height: "100%",
-                    display: "flex",
-                    flexDirection: "column",
-                    transition: "width 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
-                  }
-              : {
-                  width: w,
-                  flex: "0 0 auto",
-                  height: "100%",
-                  display: "flex",
-                  flexDirection: "column",
-                  transition: "width 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
-                };
+          const colStyle: React.CSSProperties = {
+              width: w,
+              flex: "0 0 auto",
+              height: "100%",
+              display: "flex",
+              flexDirection: "column",
+              transition: "width 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
+            };
 
           return (
             <div
@@ -3414,10 +3001,6 @@ function App() {
                   }
                 />
 
-                {/* Bottom Dock Container */}
-                <div className="dock-container dock-container--bottom">
-                  {renderDockZone("dock-bottom")}
-                </div>
               </div>
             </section>
 
@@ -3616,14 +3199,12 @@ function pushFloatingPanel(
   l: PanelLayout,
   leftW: number,
   rightW: number,
-  bottomH: number,
 ): PanelLayout {
   if (l.isDocked || !l.visible || l.maximized) return l;
 
   const next = { ...l };
   const leftBoundary = leftW + PADDING;
   const rightBoundary = window.innerWidth - rightW - PADDING;
-  const bottomBoundary = window.innerHeight - bottomH - PADDING - FOOTER_H;
 
   // Push right if overlapping left dock
   if (next.x < leftBoundary) {
@@ -3633,12 +3214,6 @@ function pushFloatingPanel(
   // Push left if overlapping right dock
   if (next.x + next.w > rightBoundary) {
     next.x = Math.max(leftBoundary, rightBoundary - next.w);
-  }
-
-  // Push up if overlapping bottom dock
-  if (next.y + next.h > bottomBoundary) {
-    const minLimitY = TOPBAR_H + PADDING;
-    next.y = Math.max(minLimitY, bottomBoundary - next.h);
   }
 
   return next;
@@ -3661,10 +3236,9 @@ function normalizeDockLayouts(
     return l.visible;
   };
 
-  const zones: ("dock-left" | "dock-right" | "dock-bottom")[] = [
+  const zones: ("dock-left" | "dock-right")[] = [
     "dock-left",
     "dock-right",
-    "dock-bottom",
   ];
 
   for (const zone of zones) {
@@ -3673,24 +3247,6 @@ function normalizeDockLayouts(
     );
 
     if (docked.length === 0) continue;
-
-    if (zone === "dock-bottom" && docked.length > 1) {
-      const sortedDocked = [...docked].sort((a, b) => {
-        const colDiff = (a[1].dockColumn ?? 0) - (b[1].dockColumn ?? 0);
-        if (colDiff !== 0) return colDiff;
-        return (a[1].dockRow ?? 0) - (b[1].dockRow ?? 0);
-      });
-      const [keeper, ...extras] = sortedDocked;
-      for (const [name] of extras) {
-        const key = name as "sidebar" | "inspector" | "info";
-        next[key] = {
-          ...next[key],
-          isDocked: false,
-          zone: "free",
-        };
-      }
-      docked = [keeper];
-    }
 
     const columns: Record<number, typeof docked> = {};
     for (const item of docked) {
@@ -3710,15 +3266,12 @@ function normalizeDockLayouts(
         const pName = item[0] as "sidebar" | "inspector" | "info";
         next[pName].dockColumn = colIdx;
         next[pName].dockRow = rowIdx;
-        if (zone === "dock-bottom") {
-          next[pName].h = BOTTOM_DOCK_HEIGHT;
-        }
       });
     });
   }
 
   const getVisibleDocked = (
-    zone: "dock-left" | "dock-right" | "dock-bottom",
+    zone: "dock-left" | "dock-right",
   ) => {
     return [
       { id: "sidebar", layout: next.sidebar },
@@ -3764,16 +3317,10 @@ function normalizeDockLayouts(
     rightW += colPanels[0]?.w ?? 240;
   }
 
-  const bottomPanels = getVisibleDocked("dock-bottom");
-  const bottomH =
-    bottomPanels.length > 0
-      ? Math.max(...bottomPanels.map((p) => (p.minimized ? 32 : p.h)))
-      : 0;
-
   // Push any floating panels away from left/right docks
-  next.sidebar = pushFloatingPanel(next.sidebar, leftW, rightW, bottomH);
-  next.inspector = pushFloatingPanel(next.inspector, leftW, rightW, bottomH);
-  next.info = pushFloatingPanel(next.info, leftW, rightW, bottomH);
+  next.sidebar = pushFloatingPanel(next.sidebar, leftW, rightW);
+  next.inspector = pushFloatingPanel(next.inspector, leftW, rightW);
+  next.info = pushFloatingPanel(next.info, leftW, rightW);
 
   return next;
 }
