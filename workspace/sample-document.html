@@ -1,0 +1,104 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Sample Review Document</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Inter, Arial, sans-serif;
+      color: #172033;
+    }
+
+    .page {
+      min-height: 240mm;
+      padding: 8mm 0;
+      break-after: page;
+    }
+
+    .cover {
+      display: grid;
+      align-content: center;
+      gap: 24px;
+      min-height: 220mm;
+      background: linear-gradient(135deg, #ffffff 0%, #edf4ff 100%);
+    }
+
+    .eyebrow {
+      color: #1f5fbf;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 620px;
+      margin: 0;
+      font-size: 54px;
+      line-height: 1.02;
+    }
+
+    .lede {
+      max-width: 560px;
+      margin: 0;
+      color: #46556b;
+      font-size: 18px;
+      line-height: 1.55;
+    }
+
+    .section {
+      display: grid;
+      gap: 18px;
+      padding-top: 26mm;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 30px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+
+    .metric {
+      padding: 18px;
+      border: 1px solid #d9e1ec;
+      border-radius: 6px;
+      background: #f9fbfd;
+    }
+  </style>
+</head>
+<body>
+  <main class="page cover" data-component="Cover page">
+    <p class="eyebrow" data-component="Document eyebrow">Agent-ready HTML review</p>
+    <h1 data-component="Main headline">Review generated documents without the PDF round trip.</h1>
+    <p class="lede" data-component="Lead paragraph">Select every visible component, copy stable component names, tune simple properties, and save the edits back into the source HTML.</p>
+  </main>
+
+  <section class="page section" data-component="Capabilities page">
+    <h2 data-component="Section heading">Reviewer workflow</h2>
+    <div class="grid" data-component="Capability grid">
+      <article class="metric" data-component="Selector card">
+        <h3>Component selector</h3>
+        <p>Click, shift-click, or drag over rendered HTML elements to bridge agent and human references.</p>
+      </article>
+      <article class="metric" data-component="Inspector card">
+        <h3>Live inspector</h3>
+        <p>Adjust text, colors, dimensions, and inline styles for precise minor revisions.</p>
+      </article>
+      <article class="metric" data-component="Export card">
+        <h3>Export with pagination</h3>
+        <p>Create viewable HTML packages or PDFs using the same page settings.</p>
+      </article>
+      <article class="metric" data-component="Template card">
+        <h3>Reusable blocks</h3>
+        <p>Save selected components as blocks and reuse them across documents in the workspace.</p>
+      </article>
+    </div>
+  </section>
+</body>
+</html>
