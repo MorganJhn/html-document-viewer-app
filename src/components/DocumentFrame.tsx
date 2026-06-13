@@ -3,6 +3,7 @@ import { FileText } from 'lucide-react'
 import type { DocumentSettings, ElementEdit, SelectionItem } from '../types'
 import { buildSettingsCss } from '../lib/documentSettings'
 import { cleanTemplateClone, collectSelectionItem, inlineComputedStyles, getElementLabel } from '../lib/selection'
+import { copyToClipboard } from '../lib/utils'
 
 export interface DocumentFrameHandle {
   applyElementEdit: (edit: ElementEdit) => void
@@ -151,7 +152,7 @@ export const DocumentFrame = forwardRef<DocumentFrameHandle, DocumentFrameProps>
       if (!style) {
         style = doc.createElement('style')
         style.setAttribute('id', 'hdv-slide-deck-styles')
-        doc.head.append(style)
+        ;(doc.head || doc.documentElement).appendChild(style)
       }
       if (style.textContent !== expectedCss) {
         style.textContent = expectedCss
@@ -178,7 +179,7 @@ export const DocumentFrame = forwardRef<DocumentFrameHandle, DocumentFrameProps>
       if (!style) {
         style = doc.createElement('style')
         style.setAttribute('id', 'hdv-document-scale-styles')
-        doc.head.append(style)
+        ;(doc.head || doc.documentElement).appendChild(style)
       }
       if (style.textContent !== expectedCss) {
         style.textContent = expectedCss
@@ -237,7 +238,7 @@ export const DocumentFrame = forwardRef<DocumentFrameHandle, DocumentFrameProps>
       if (!style) {
         style = doc.createElement('style')
         style.setAttribute('data-hdv-preview-settings', '')
-        doc.head.append(style)
+        ;(doc.head || doc.documentElement).appendChild(style)
       }
       style.textContent = buildSettingsCss(settings)
     },
@@ -656,7 +657,7 @@ export const DocumentFrame = forwardRef<DocumentFrameHandle, DocumentFrameProps>
   }
 
   async function copySelectionNames() {
-    await navigator.clipboard.writeText(selectedItems.map((item) => item.agentReference).join('\n'))
+    await copyToClipboard(selectedItems.map((item) => item.agentReference).join('\n'))
   }
 
   const shellRef = useRef<HTMLDivElement | null>(null)

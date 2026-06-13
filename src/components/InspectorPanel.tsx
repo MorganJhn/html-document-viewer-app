@@ -22,7 +22,7 @@ import {
   IconButton,
   Tabs,
 } from "./ui";
-import { colorToHex, toast, formatBreadcrumb } from "../lib/utils";
+import { colorToHex, toast, formatBreadcrumb, copyToClipboard } from "../lib/utils";
 
 export type InspectorTab = "selection" | "document" | "library";
 
@@ -296,7 +296,7 @@ export function InspectorPanel({
                       <IconButton
                         title="Copy agent references to clipboard"
                         onClick={() =>
-                          navigator.clipboard.writeText(
+                          void copyToClipboard(
                             selectedItems
                               .map((item) => item.agentReference)
                               .join("\n"),

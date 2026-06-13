@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Copy, Check, FilePlus, ChevronLeft, ChevronRight } from "lucide-react";
 import type { DocumentSettings } from "../types";
+import { copyToClipboard } from "../lib/utils";
 
 interface ButtonProps {
   children: ReactNode;
@@ -941,8 +942,7 @@ export function NewDocumentModal({
   };
 
   const handleCopy = () => {
-    navigator.clipboard
-      ?.writeText(generatedPrompt)
+    copyToClipboard(generatedPrompt)
       .then(() => {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);

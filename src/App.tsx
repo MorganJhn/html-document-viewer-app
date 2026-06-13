@@ -32,7 +32,7 @@ import {
   type DocumentFrameHandle,
 } from "./components/DocumentFrame";
 import { InspectorPanel, type InspectorTab } from "./components/InspectorPanel";
-import { triggerConfetti, toast, formatBreadcrumb } from "./lib/utils";
+import { triggerConfetti, toast, formatBreadcrumb, copyToClipboard } from "./lib/utils";
 import { DEFAULT_SETTINGS, resolvePageSize, cssLengthToPx } from "./lib/documentSettings";
 import { mergeEdits } from "./lib/panel-layouts";
 import {
@@ -682,7 +682,7 @@ function App() {
                     .map((item) => item.agentReference)
                     .join("\n")
                 : `HDV_REF file="${activeDocument?.relativePath || ""}" path="${path}"`;
-            navigator.clipboard.writeText(refStr);
+            void copyToClipboard(refStr);
             toast(
               menuSelectedItems.length > 1
                 ? "Copied references to clipboard"
@@ -705,7 +705,7 @@ function App() {
                     )
                     .join("\n")
                 : frameRef.current.getElementInnerHtml(path);
-            navigator.clipboard.writeText(html);
+            void copyToClipboard(html);
             toast("Copied inner HTML to clipboard", "success");
           }
         },
@@ -821,7 +821,7 @@ function App() {
       {
         label: "Copy Path",
         onClick: () => {
-          navigator.clipboard.writeText(doc.relativePath);
+          void copyToClipboard(doc.relativePath);
           toast("Path copied", "success");
         },
       },
@@ -861,7 +861,7 @@ function App() {
       {
         label: "Copy Path",
         onClick: () => {
-          navigator.clipboard.writeText(doc.relativePath);
+          void copyToClipboard(doc.relativePath);
           toast("Path copied", "success");
         },
       },
@@ -1187,6 +1187,13 @@ function App() {
     await runTask("HTML export created.", async () => {
       const result = await api.exportHtml(activeDocument.id);
       triggerConfetti();
+      const filename = result.path.split(/[/\\]/).pop() || "export.html";
+      const link = document.createElement("a");
+      link.href = `/api/exports/download?filename=${encodeURIComponent(filename)}`;
+      link.setAttribute("download", filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
       return `HTML export: ${result.path}`;
     });
   }
@@ -1198,6 +1205,13 @@ function App() {
     await runTask("PDF export created.", async () => {
       const result = await api.exportPdf(activeDocument.id);
       triggerConfetti();
+      const filename = result.path.split(/[/\\]/).pop() || "export.pdf";
+      const link = document.createElement("a");
+      link.href = `/api/exports/download?filename=${encodeURIComponent(filename)}`;
+      link.setAttribute("download", filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
       return `PDF export: ${result.path}`;
     });
   }
@@ -1865,7 +1879,7 @@ function App() {
           disabled: selectedItems.length === 0,
           onClick: () => {
             if (selectedItems.length > 0) {
-              void navigator.clipboard.writeText(
+              void copyToClipboard(
                 selectedItems.map((item) => item.agentReference).join("\n"),
               );
               toast("References copied to clipboard", "success");
@@ -3018,8 +3032,7 @@ const DockviewInfoPanel = () => {
           type="button"
           className="fip-action-btn"
           onClick={() => {
-            void navigator.clipboard
-              .writeText(selectedItems.map((i: any) => i.agentReference).join("\n"))
+            void copyToClipboard(selectedItems.map((i: any) => i.agentReference).join("\n"))
               .then(() => {
                 setFipCopyNotice("All references copied");
                 setTimeout(() => setFipCopyNotice(""), 1800);
@@ -3039,7 +3052,7 @@ const DockviewInfoPanel = () => {
             type="button"
             className="fip-item"
             onClick={() => {
-              void navigator.clipboard.writeText(item.agentReference).then(() => {
+              void copyToClipboard(item.agentReference).then(() => {
                 setFipCopyNotice("Copied");
                 setTimeout(() => setFipCopyNotice(""), 1800);
               });

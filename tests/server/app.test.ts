@@ -72,3 +72,34 @@ describe('POST /api/documents', () => {
     expect(response.body.error).toBe('PATH_OUTSIDE_WORKSPACE')
   })
 })
+
+describe('GET /api/exports/download', () => {
+  it('downloads the file if inside the exports directory', async () => {
+    const app = createApp()
+    const testFile = path.resolve('./workspace/_hdv/exports/test-download.pdf')
+    await fs.mkdir(path.dirname(testFile), { recursive: true })
+    await fs.writeFile(testFile, 'PDF-content', 'utf8')
+
+    const response = await request(app)
+      .get(`/api/exports/download?filename=test-download.pdf`)
+      .set('Host', '127.0.0.1')
+
+    expect(response.status).toBe(200)
+    expect(response.headers['content-disposition']).toContain('attachment; filename="test-download.pdf"')
+    expect(response.body.toString('utf8')).toBe('PDF-content')
+
+    await fs.unlink(testFile).catch(() => {})
+  })
+
+  it('returns 403 if trying to download a file outside exports directory via path traversal', async () => {
+    const app = createApp()
+
+    const response = await request(app)
+      .get(`/api/exports/download?filename=../test-outside.pdf`)
+      .set('Host', '127.0.0.1')
+
+    expect(response.status).toBe(403)
+    expect(response.body.error).toBe('ACCESS_DENIED')
+  })
+})
+

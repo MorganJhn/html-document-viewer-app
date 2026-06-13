@@ -103,8 +103,10 @@ export function renderDocumentMarkup(html: string, documentId: string, options: 
   const head = [
     `<base data-hdv-base href="${escapeAttribute(baseHref)}">`,
     buildDocumentSettingsStyle(settings, 'data-hdv-preview-settings'),
-    `<link rel="stylesheet" href="/viewer/render.css">`,
   ]
+  if (options.previewMode) {
+    head.push(`<link rel="stylesheet" href="/viewer/render.css">`)
+  }
   if (!options.isSlideDeck) {
     if (options.previewMode) {
       head.push(`<script>window.PagedConfig = { auto: false };</script>`)

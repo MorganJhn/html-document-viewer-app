@@ -77,10 +77,16 @@ test('selects, edits, saves, and exports a document', async ({ page }) => {
   await expect(page.getByText('Saved').last()).toBeVisible()
   await expect(frame.locator('[data-component="Headline"]').first()).toContainText('Edited headline')
 
+  const htmlDownloadPromise = page.waitForEvent('download')
   await page.getByTitle('Export HTML').click()
+  const htmlDownload = await htmlDownloadPromise
+  expect(htmlDownload.suggestedFilename()).toMatch(/\.html$/i)
   await expect(page.getByText(/HTML export:/)).toBeVisible()
 
+  const pdfDownloadPromise = page.waitForEvent('download')
   await page.getByTitle('Export PDF').click()
+  const pdfDownload = await pdfDownloadPromise
+  expect(pdfDownload.suggestedFilename()).toMatch(/\.pdf$/i)
   await expect(page.getByText(/PDF export:/)).toBeVisible()
 
   const savedSource = await fs.readFile(documentPath, 'utf8')

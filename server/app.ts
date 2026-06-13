@@ -49,6 +49,7 @@ export function createApp() {
   })
 
   app.get('/viewer/render.css', (_req, res) => {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private')
     res.type('text/css').send(renderCss)
   })
 
@@ -331,9 +332,33 @@ export function createApp() {
       const html = await fs.readFile(documentPath, 'utf8')
       const settings = readDocumentSettings(html)
       const isSlideDeck = settings.pageSizePreset === 'Slide16_9'
-      const renderUrl = `${req.protocol}://${req.get('host')}/api/documents/${encodeURIComponent(documentId)}/render${isSlideDeck ? '?slideDeck=true' : ''}`
+      const renderUrl = `http://127.0.0.1:${req.socket.localPort}/api/documents/${encodeURIComponent(documentId)}/render${isSlideDeck ? '?slideDeck=true' : ''}`
       const outputPath = await exportPdf(config.workspacePath, documentPath, renderUrl)
       res.json({ ok: true, path: outputPath })
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  app.get('/api/exports/download', async (req, res, next) => {
+    try {
+      const config = await getWorkspaceConfig()
+      const folders = await ensureWorkspace(config.workspacePath)
+      const rawFilename = String(req.query.filename || '')
+      if (!rawFilename) {
+        res.status(400).json({ error: 'INVALID_FILENAME', message: 'Filename is required' })
+        return
+      }
+      if (rawFilename !== path.basename(rawFilename)) {
+        res.status(403).json({ error: 'ACCESS_DENIED', message: 'Path must be a direct filename' })
+        return
+      }
+      const filePath = path.resolve(folders.exports, rawFilename)
+      if (!isPathInside(folders.exports, filePath)) {
+        res.status(403).json({ error: 'ACCESS_DENIED', message: 'Path must be inside exports directory' })
+        return
+      }
+      res.download(filePath)
     } catch (error) {
       next(error)
     }
