@@ -24,13 +24,30 @@ async function main() {
     app.use(vite.middlewares)
   }
 
-  app.listen(port, host, () => {
-    const url = `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${port}`
-    console.log(`HTML Document Viewer running at ${url}`)
-    if (host === '0.0.0.0') {
-      console.log('Remote access is enabled. Set HDV_TOKEN to allow write/export actions through a public host.')
-    }
-  })
+  const currentPort = port
+  const maxPortTries = 10
+
+  function startServer(attemptPort: number) {
+    const server = app.listen(attemptPort, host, () => {
+      const url = `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${attemptPort}`
+      console.log(`HTML Document Viewer running at ${url}`)
+      if (host === '0.0.0.0') {
+        console.log('Remote access is enabled. Set HDV_TOKEN to allow write/export actions through a public host.')
+      }
+    })
+
+    server.on('error', (err: Error & { code?: string }) => {
+      if (err.code === 'EADDRINUSE' && attemptPort - port < maxPortTries) {
+        console.log(`Port ${attemptPort} is already in use, trying next port...`)
+        startServer(attemptPort + 1)
+      } else {
+        console.error(err)
+        process.exit(1)
+      }
+    })
+  }
+
+  startServer(currentPort)
 }
 
 main().catch((error) => {

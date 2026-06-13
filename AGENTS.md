@@ -64,6 +64,27 @@ For user references:
 - Confirm the tag, nearby text, and document context before editing.
 - If a reference is ambiguous, ask for a parent or nearby copied reference only after reasonable source search fails.
 
+## Document and Slide Deck Compatibility Rules
+
+To ensure generated documents and slide decks render correctly and work with the app's features (such as presentation views):
+
+- **Valid Page Sizing (No Custom Size Keywords)**: Never write custom page size keywords like `Slide16_9` or `Slide16_9 landscape` directly in `@page { size: ... }`. Always use explicit length dimensions (e.g., `size: 297mm 167mm;`).
+- **Managed Settings Block**: Keep layout configuration inside `<style data-hdv-document-settings>` with the corresponding JSON comment (e.g., `/* hdv-settings:{"pageSizePreset":"Slide16_9",...} */`). Do not delete or rename this block.
+- **Page/Slide Container Elements**: Use semantic page-sized containers (e.g., `<section class="page" data-component="Cover slide" data-hdv-id="cover-slide">`) for each page or slide.
+- **Explicit Container Styling**: Ensure the document stylesheet defines `.page` dimensions matching the `@page` size with page breaks enabled:
+  ```css
+  .page {
+    width: 297mm;
+    height: 167mm;
+    break-after: page;
+    box-sizing: border-box;
+    position: relative;
+    overflow: hidden;
+  }
+  ```
+- **Component Identifiers**: Assign `data-component` (for descriptive targets) and unique, stable `data-hdv-id` attributes to page blocks and key repeated elements.
+- **Relative Asset Paths**: Always use relative paths for images, scripts, and stylesheets so they resolve correctly inside the workspace.
+
 ## Important Paths
 
 - App code: `src/`, `server/`, `tests/`

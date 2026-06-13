@@ -27,7 +27,7 @@
   border-bottom: 1px solid rgba(0, 0, 0, 0.28);
   box-shadow: var(--crease-glow), inset 0 -0.5px 0 rgba(255, 255, 255, 0.05);
   position: relative;
-  z-index: 100;
+  z-index: 900;
   padding: 0;
   user-select: none;
 }
@@ -986,19 +986,9 @@
    ============================================================ */
 
 .selection-popover {
-  position: absolute;
-  right: 20px;
-  bottom: 20px;
-  width: 320px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: var(--r-lg);
-  background: rgba(30, 30, 32, 0.85);
-  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(0,0,0,0.2) inset;
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  z-index: 50;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
-  animation: popover-in var(--dur-slow) var(--ease-out);
 }
 
 @keyframes popover-in {
@@ -2412,7 +2402,7 @@
   color: var(--text-3);
   font-family: -apple-system, BlinkMacSystemFont, sans-serif;
   user-select: none;
-  z-index: 100;
+  z-index: 900;
   flex-shrink: 0;
   transition: transform var(--dur-base) var(--spring-smooth), opacity var(--dur-base);
 }
@@ -3396,6 +3386,14 @@
 .breadcrumb-item:hover {
   background: var(--bg-hover);
   color: var(--text-1);
+}
+.breadcrumb-item--current {
+  color: var(--accent) !important;
+  font-weight: 600;
+  cursor: default;
+}
+.breadcrumb-item--current:hover {
+  background: transparent !important;
 }
 
 /* ============================================================
@@ -4419,6 +4417,8 @@ body.fip-resizing .fip {
   border-radius: 0 !important;
   box-shadow: none !important;
   animation: none !important;
+  position: relative !important;
+  z-index: 900 !important;
 }
 
 .fip--docked.fip--minimized {
@@ -4639,6 +4639,379 @@ body.fip-resizing .dock-zone-content {
   background-repeat: no-repeat;
   background-position: right 8px center;
   padding-right: 24px;
+}
+
+/* ============================================================
+   SLIDE DECK CUSTOM VIEW MODE STYLES
+   ============================================================ */
+
+.canvas-content-wrapper--slide-deck {
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+
+.normal-main-layout,
+.normal-frame-workspace,
+.normal-frame-scale-container {
+  display: contents;
+}
+
+.slide-deck-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  height: 100%;
+  overflow: hidden;
+}
+
+.slide-deck-main-layout {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Slide Thumbnail outline sidebar - dark Google Slides style */
+.slide-deck-thumbnail-strip {
+  width: 180px;
+  flex: 0 0 180px;
+  background: #1a1d24 !important;
+  border-right: 1px solid #2d3343 !important;
+  overflow-y: auto;
+  padding: 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.slide-thumbnail-card {
+  position: relative;
+  cursor: pointer;
+  border: 1px solid #2d3343 !important;
+  border-radius: var(--r-md);
+  background: #111318 !important;
+  transition: all var(--dur-fast) var(--ease-out);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+  user-select: none;
+}
+
+.slide-thumbnail-card:hover {
+  border-color: #3b82f6 !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.slide-thumbnail-card--active {
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25), 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+  background: #242936 !important;
+}
+
+.slide-thumbnail-number {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #94a3b8 !important;
+  z-index: 2;
+}
+
+.slide-thumbnail-card-inner {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px 8px 8px 8px;
+  text-align: center;
+}
+
+.slide-thumbnail-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: #cbd5e1 !important;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.slide-thumbnail-empty {
+  font-size: 11px;
+  color: #64748b !important;
+  text-align: center;
+  padding: 24px 0;
+}
+
+/* Slide Deck Frame Canvas Area - Slate Dark Canvas */
+.slide-deck-frame-workspace {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 32px;
+  background: #111318 !important;
+  position: relative;
+  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.5);
+}
+
+.slide-deck-frame-workspace:fullscreen {
+  background: #000000 !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+}
+
+.slide-deck-frame-scale-container {
+  flex-shrink: 0 !important;
+  flex-grow: 0 !important;
+  transition: transform var(--dur-normal) var(--ease-out);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: #000000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.slide-deck-frame-scale-container .document-frame-shell {
+  width: 100% !important;
+  height: 100% !important;
+  padding: 0 !important;
+  background: transparent !important;
+}
+
+.slide-deck-frame-scale-container .document-frame {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* Slide Deck Navigation Toolbar - dark presentation toolbar */
+.slide-deck-navigation-bar {
+  height: 48px;
+  flex: 0 0 48px;
+  background: #1a1d24 !important;
+  border-top: 1px solid #2d3343 !important;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  z-index: 10;
+  color: #cbd5e1 !important;
+}
+
+.slide-deck-nav-left,
+.slide-deck-nav-center,
+.slide-deck-nav-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.slide-deck-nav-btn {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  border: none !important;
+  background: transparent !important;
+  color: #94a3b8 !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.slide-deck-nav-btn:hover:not(:disabled) {
+  background: #2d3343 !important;
+  color: #ffffff !important;
+}
+
+.slide-deck-nav-btn:active:not(:disabled) {
+  background: #363d50 !important;
+}
+
+.slide-deck-nav-btn:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+
+.slide-deck-nav-indicator {
+  font-size: 11px;
+  font-weight: 600;
+  color: #cbd5e1 !important;
+  min-width: 80px;
+  text-align: center;
+  user-select: none;
+}
+
+.slide-deck-nav-select {
+  height: 28px;
+  min-width: 140px;
+  padding: 0 24px 0 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-raised);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  outline: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='rgba(0,0,0,0.5)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.theme-true-black .slide-deck-nav-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.45)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+}
+
+.slide-deck-nav-select:hover {
+  border-color: var(--border-medium);
+  background-color: var(--bg-hover);
+}
+
+.slide-deck-scale-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.slide-deck-scale-label {
+  font-size: 10px;
+  color: var(--text-3);
+  min-width: 70px;
+  user-select: none;
+}
+
+.slide-deck-scale-slider {
+  width: 80px;
+  height: 4px;
+  accent-color: var(--accent-bright);
+  cursor: pointer;
+}
+
+.slide-deck-nav-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--border-soft);
+  margin: 0 4px;
+}
+
+/* ============================================================
+   DOCKVIEW INTEGRATION & GLASSMORPHISM OVERRIDES
+   ============================================================ */
+
+.hdv-dockview {
+  width: 100% !important;
+  height: 100% !important;
+  flex: 1 !important;
+}
+
+/* Group Headers / Tabs Bar */
+.hdv-dockview .dockview-group-header {
+  background: var(--toolbar-glass) !important;
+  backdrop-filter: var(--toolbar-blur) !important;
+  -webkit-backdrop-filter: var(--toolbar-blur) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+  height: 36px !important;
+}
+
+/* Individual Tabs */
+.hdv-dockview .dockview-tab {
+  font-family: inherit !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  color: var(--text-3) !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 16px !important;
+  height: 36px !important;
+  line-height: 36px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  transition: color var(--dur-fast), background var(--dur-fast);
+}
+
+.hdv-dockview .dockview-tab:hover {
+  color: var(--text-2) !important;
+  background: rgba(255, 255, 255, 0.02) !important;
+}
+
+.hdv-dockview .dockview-tab.dockview-tab--active {
+  color: var(--text-1) !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  box-shadow: inset 0 -2px 0 var(--accent-bright) !important;
+}
+
+/* Panel Content Area */
+.hdv-dockview .dockview-content {
+  background: transparent !important;
+}
+
+/* Floating Window Groups */
+.hdv-dockview .dockview-floating-group {
+  background: var(--popover-glass) !important;
+  backdrop-filter: var(--popover-blur) !important;
+  -webkit-backdrop-filter: var(--popover-blur) !important;
+  border: 1px solid var(--border-medium) !important;
+  border-radius: var(--r-md) !important;
+  box-shadow: var(--shadow-lg) !important;
+  overflow: hidden !important;
+}
+
+.hdv-dockview .dockview-floating-group .dockview-group-header {
+  border-bottom: 1px solid var(--border-soft) !important;
+}
+
+/* Splitters / Resizing Bars */
+.hdv-dockview .dockview-splitter {
+  background: transparent !important;
+  transition: background var(--dur-fast);
+}
+
+.hdv-dockview .dockview-splitter:hover,
+.hdv-dockview .dockview-splitter:active {
+  background: var(--accent-bright) !important;
+}
+
+.dockview-panel-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+/* Ensure inside contents render properly */
+.dockview-panel-container.sidebar {
+  background: var(--sidebar-glass) !important;
+  backdrop-filter: var(--sidebar-blur) !important;
+  -webkit-backdrop-filter: var(--sidebar-blur) !important;
+}
+
+.dockview-panel-container.inspector {
+  background: var(--inspector-glass) !important;
+  backdrop-filter: var(--inspector-blur) !important;
+  -webkit-backdrop-filter: var(--inspector-blur) !important;
+}
+
+.dockview-panel-container.info-panel {
+  background: var(--popover-glass) !important;
+  backdrop-filter: var(--popover-blur) !important;
+  -webkit-backdrop-filter: var(--popover-blur) !important;
 }
 
 

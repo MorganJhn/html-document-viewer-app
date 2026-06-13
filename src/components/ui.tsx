@@ -38,6 +38,7 @@ interface FieldProps {
   children: ReactNode;
   hint?: string;
   className?: string;
+  style?: React.CSSProperties;
 }
 
 export function Button({
@@ -198,9 +199,9 @@ export function Tabs<T extends string>({
   );
 }
 
-export function Field({ label, children, hint, className = "" }: FieldProps) {
+export function Field({ label, children, hint, className = "", style }: FieldProps) {
   return (
-    <label className={`field${className ? ` ${className}` : ""}`}>
+    <label className={`field${className ? ` ${className}` : ""}`} style={style}>
       <span>{label}</span>
       {children}
       {hint && <small>{hint}</small>}
@@ -898,10 +899,8 @@ export function NewDocumentModal({
     setErrorMsg("");
 
     try {
-      const mappedPreset =
-        pageSizePreset === "Slide16_9" ? "Custom" : pageSizePreset;
       const settings: DocumentSettings = {
-        pageSizePreset: mappedPreset as DocumentSettings["pageSizePreset"],
+        pageSizePreset: pageSizePreset as DocumentSettings["pageSizePreset"],
         orientation,
         width,
         height,

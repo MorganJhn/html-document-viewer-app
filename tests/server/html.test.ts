@@ -4,7 +4,9 @@ import {
   applyDocumentEdits,
   insertTemplateHtml,
   readDocumentSettings,
+  readGlobalStyle,
   upsertDocumentSettings,
+  upsertGlobalStyle,
   type DocumentSettings,
 } from '../../server/html'
 
@@ -60,7 +62,7 @@ describe('html document utilities', () => {
     const edited = upsertDocumentSettings(source, settings)
 
     expect(edited).toContain('data-hdv-document-settings')
-    expect(edited).toContain('size: Letter landscape')
+    expect(edited).toContain('size: 11in 8.5in;')
     expect(readDocumentSettings(edited)).toEqual(settings)
   })
 
@@ -72,5 +74,48 @@ describe('html document utilities', () => {
     })
 
     expect(edited).toContain('<p>Lead</p>\n<aside data-component="Note">Reusable</aside>')
+  })
+
+  it('reads and upserts global style blocks', () => {
+    const htmlWithStyle = `<!doctype html>
+<html>
+<head>
+  <style>
+    body { background: blue; }
+  </style>
+</head>
+<body>
+</body>
+</html>`
+    
+    expect(readGlobalStyle(htmlWithStyle).trim()).toBe('body { background: blue; }')
+    
+    const updated = upsertGlobalStyle(htmlWithStyle, 'body { background: red; }')
+    expect(updated).toContain('body { background: red; }')
+    expect(updated).not.toContain('body { background: blue; }')
+    expect(readGlobalStyle(updated).trim()).toBe('body { background: red; }')
+  })
+
+  it('locates elements by selector first and falls back to path', () => {
+    const testHtml = `<!doctype html>
+<html>
+<body>
+  <div data-hdv-id="header-block">Original Text</div>
+  <p>Some Paragraph</p>
+</body>
+</html>`
+
+    const edited = applyDocumentEdits(testHtml, {
+      elementEdits: [
+        {
+          targetPath: '0.1.1',
+          selector: 'data-hdv-id=header-block',
+          textContent: 'Updated Text',
+        }
+      ]
+    })
+    
+    expect(edited).toContain('<div data-hdv-id="header-block">Updated Text</div>')
+    expect(edited).toContain('<p>Some Paragraph</p>')
   })
 })

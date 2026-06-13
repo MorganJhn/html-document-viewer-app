@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Download,
   FileText,
@@ -12,29 +13,36 @@ import {
   Sliders,
   ChevronDown,
   ChevronRight,
+  ChevronLeft,
   Check,
   Eye,
   Plus,
+  Maximize2,
+  Undo,
+  Redo,
+  Copy,
 } from "lucide-react";
 import "./App.css";
+import { DockviewReact, DockviewApi } from "dockview-react";
+import type { DockviewReadyEvent } from "dockview-react";
+import "dockview-react/dist/styles/dockview.css";
 import { api, getStoredToken, setStoredToken } from "./api";
 import {
   DocumentFrame,
   type DocumentFrameHandle,
 } from "./components/DocumentFrame";
 import { InspectorPanel, type InspectorTab } from "./components/InspectorPanel";
+import { triggerConfetti, toast, formatBreadcrumb } from "./lib/utils";
+import { DEFAULT_SETTINGS, resolvePageSize, cssLengthToPx } from "./lib/documentSettings";
+import { mergeEdits } from "./lib/panel-layouts";
 import {
   IconButton,
   ContextMenu,
   type ContextMenuItem,
   ToastContainer,
-  Field,
   Dialog,
   NewDocumentModal,
-  HorizontalScrollContainer,
 } from "./components/ui";
-import { triggerConfetti, toast } from "./lib/utils";
-import { DEFAULT_SETTINGS } from "./lib/documentSettings";
 import type {
   DocumentDetail,
   DocumentSettings,
@@ -44,101 +52,11 @@ import type {
   TemplateRecord,
 } from "./types";
 
-import { FloatingInfoPanel } from "./components/FloatingInfoPanel";
-import {
-  FloatingPanel,
-  type PanelLayout,
-} from "./components/FloatingPanel";
+import { createContext, useContext } from "react";
+import { LibraryScreen } from "./components/LibraryScreen";
+import { SettingsScreen } from "./components/SettingsScreen";
 
-function getInitialSidebar(): PanelLayout {
-  try {
-    const saved = localStorage.getItem("hdv-sidebar-layout");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (parsed && typeof parsed.w === "number") {
-        parsed.w = Math.max(180, parsed.w);
-        parsed.h = Math.max(100, parsed.h);
-        if (typeof parsed.dockColumn !== "number") parsed.dockColumn = 0;
-        if (typeof parsed.dockRow !== "number") parsed.dockRow = 0;
-        return parsed;
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-  return {
-    x: 6,
-    y: 50,
-    w: 220,
-    h: typeof window !== "undefined" ? window.innerHeight - 50 - 32 : 600,
-    isDocked: true,
-    zone: "dock-left",
-    minimized: false,
-    visible: true,
-    dockColumn: 0,
-    dockRow: 0,
-  };
-}
-
-function getInitialInspector(): PanelLayout {
-  try {
-    const saved = localStorage.getItem("hdv-inspector-layout");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (parsed && typeof parsed.w === "number") {
-        parsed.w = Math.max(240, parsed.w);
-        parsed.h = Math.max(100, parsed.h);
-        if (typeof parsed.dockColumn !== "number") parsed.dockColumn = 0;
-        if (typeof parsed.dockRow !== "number") parsed.dockRow = 0;
-        return parsed;
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-  return {
-    x: typeof window !== "undefined" ? window.innerWidth - 280 - 6 : 800,
-    y: 50,
-    w: 280,
-    h: typeof window !== "undefined" ? window.innerHeight - 50 - 32 : 600,
-    isDocked: true,
-    zone: "dock-right",
-    minimized: false,
-    visible: true,
-    dockColumn: 0,
-    dockRow: 0,
-  };
-}
-
-function getInitialInfoPanel(): PanelLayout {
-  try {
-    const saved = localStorage.getItem("hdv-info-panel-layout");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (parsed && typeof parsed.w === "number") {
-        parsed.w = Math.max(180, parsed.w);
-        parsed.h = Math.max(100, parsed.h);
-        if (typeof parsed.dockColumn !== "number") parsed.dockColumn = 0;
-        if (typeof parsed.dockRow !== "number") parsed.dockRow = 0;
-        return parsed;
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-  return {
-    x: 300,
-    y: typeof window !== "undefined" ? window.innerHeight - 200 : 500,
-    w: 320,
-    h: 150,
-    isDocked: false,
-    zone: "free",
-    minimized: false,
-    visible: false,
-    dockColumn: 0,
-    dockRow: 0,
-  };
-}
+const AppContext = createContext<any>(null);
 
 function App() {
   const frameRef = useRef<DocumentFrameHandle | null>(null);
@@ -151,6 +69,97 @@ function App() {
   );
   const [settings, setSettings] = useState<DocumentSettings>(DEFAULT_SETTINGS);
   const [settingsDirty, setSettingsDirty] = useState(false);
+  const [globalStyle, setGlobalStyle] = useState<string>("");
+  const [pendingGlobalStyle, setPendingGlobalStyle] = useState<string | null>(null);
+
+  interface HistorySnapshot {
+    pendingEdits: Record<string, ElementEdit>;
+    settings: DocumentSettings;
+    settingsDirty: boolean;
+    pendingGlobalStyle: string | null;
+  }
+  const [past, setPast] = useState<HistorySnapshot[]>([]);
+  const [future, setFuture] = useState<HistorySnapshot[]>([]);
+  const historyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const pushToHistory = (
+    nextPendingEdits: Record<string, ElementEdit>,
+    nextSettings: DocumentSettings,
+    nextSettingsDirty: boolean,
+    nextPendingGlobalStyle: string | null,
+    immediate = false
+  ) => {
+    if (historyTimeoutRef.current) {
+      clearTimeout(historyTimeoutRef.current);
+      historyTimeoutRef.current = null;
+    }
+
+    const snapshot: HistorySnapshot = {
+      pendingEdits: JSON.parse(JSON.stringify(nextPendingEdits)),
+      settings: { ...nextSettings },
+      settingsDirty: nextSettingsDirty,
+      pendingGlobalStyle: nextPendingGlobalStyle,
+    };
+
+    const runPush = () => {
+      setPast((prev) => {
+        const next = [...prev, snapshot];
+        if (next.length > 50) {
+          next.shift();
+        }
+        return next;
+      });
+      setFuture([]);
+    };
+
+    if (immediate) {
+      runPush();
+    } else {
+      historyTimeoutRef.current = setTimeout(runPush, 500);
+    }
+  };
+
+  const canUndo = past.length > 1;
+  const canRedo = future.length > 0;
+
+  const undo = () => {
+    if (past.length <= 1) return;
+    if (historyTimeoutRef.current) {
+      clearTimeout(historyTimeoutRef.current);
+      historyTimeoutRef.current = null;
+    }
+    const current = past[past.length - 1];
+    const previous = past[past.length - 2];
+
+    setPast((prev) => prev.slice(0, -1));
+    setFuture((prev) => [...prev, current]);
+
+    setPendingEdits(previous.pendingEdits);
+    setSettings(previous.settings);
+    setSettingsDirty(previous.settingsDirty);
+    setPendingGlobalStyle(previous.pendingGlobalStyle);
+
+    setReloadToken((value) => value + 1);
+  };
+
+  const redo = () => {
+    if (future.length === 0) return;
+    if (historyTimeoutRef.current) {
+      clearTimeout(historyTimeoutRef.current);
+      historyTimeoutRef.current = null;
+    }
+    const next = future[future.length - 1];
+
+    setPast((prev) => [...prev, next]);
+    setFuture((prev) => prev.slice(0, -1));
+
+    setPendingEdits(next.pendingEdits);
+    setSettings(next.settings);
+    setSettingsDirty(next.settingsDirty);
+    setPendingGlobalStyle(next.pendingGlobalStyle);
+
+    setReloadToken((value) => value + 1);
+  };
   const [selectorEnabled, setSelectorEnabled] = useState(true);
   const [selectedItems, setSelectedItems] = useState<SelectionItem[]>([]);
   const [pendingEdits, setPendingEdits] = useState<Record<string, ElementEdit>>(
@@ -175,462 +184,128 @@ function App() {
   >("editor");
   const [isNewDocModalOpen, setIsNewDocModalOpen] = useState(false);
 
-  const [initialLayouts] = useState(() => {
-    const sidebar = getInitialSidebar();
-    const inspector = getInitialInspector();
-    const info = getInitialInfoPanel();
-    return normalizeDockLayouts(sidebar, inspector, info, false);
-  });
+  const slideDeckMode = settings.pageSizePreset === "Slide16_9";
+  const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
+  const [discoveredSlides, setDiscoveredSlides] = useState<
+    Array<{ id: string; name: string; elementIndex: number }>
+  >([]);
+  const [slideScale, setSlideScale] = useState(1.0);
+  const [docScale, setDocScale] = useState(1.0);
+  const [dockviewApi, setDockviewApi] = useState<DockviewApi | null>(null);
+  const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [inspectorVisible, setInspectorVisible] = useState(true);
+  const [infoPanelVisible, setInfoPanelVisible] = useState(false);
 
-  const [sidebarLayout, rawSetSidebarLayout] = useState<PanelLayout>(
-    initialLayouts.sidebar,
-  );
-  const [inspectorLayout, rawSetInspectorLayout] = useState<PanelLayout>(
-    initialLayouts.inspector,
-  );
-  const [infoPanelLayout, rawSetInfoPanelLayout] = useState<PanelLayout>(
-    initialLayouts.info,
-  );
+  const leftDockWidth = 220;
+  const rightDockWidth = 280;
 
-  useEffect(() => {
-    localStorage.setItem("hdv-sidebar-layout", JSON.stringify(sidebarLayout));
-  }, [sidebarLayout]);
+  const onReady = (event: DockviewReadyEvent) => {
+    setDockviewApi(event.api);
 
-  useEffect(() => {
-    localStorage.setItem(
-      "hdv-inspector-layout",
-      JSON.stringify(inspectorLayout),
-    );
-  }, [inspectorLayout]);
-
-  useEffect(() => {
-    localStorage.setItem(
-      "hdv-info-panel-layout",
-      JSON.stringify(infoPanelLayout),
-    );
-  }, [infoPanelLayout]);
-
-  const getPanelLayout = (panelId: string): PanelLayout => {
-    if (panelId === "sidebar") return sidebarLayout;
-    if (panelId === "inspector") return inspectorLayout;
-    return infoPanelLayout;
-  };
-
-  const adjustLayoutForAppearance = useCallback(
-    (
-      panelId: string,
-      next: PanelLayout,
-      currentSidebar: PanelLayout,
-      currentInspector: PanelLayout,
-      currentInfo: PanelLayout,
-    ): PanelLayout => {
-      if (next.visible && next.isDocked && next.zone !== "free") {
-        const otherDockedVisible = [
-          { id: "sidebar", layout: currentSidebar },
-          { id: "inspector", layout: currentInspector },
-          { id: "info-panel", layout: currentInfo },
-        ].filter(
-          (p) =>
-            p.id !== panelId &&
-            p.layout.isDocked &&
-            p.layout.zone === next.zone &&
-            p.layout.visible &&
-            (p.id !== "info-panel" || selectedItems.length > 0),
-        );
-
-        if (otherDockedVisible.length > 0) {
-          return {
-            ...next,
-            isDocked: false,
-            zone: "free",
-            x: next.restoreX ?? Math.max(6, (window.innerWidth - next.w) / 2),
-            y: next.restoreY ?? Math.max(42, (window.innerHeight - next.h) / 2),
-            w: next.restoreW ?? next.w,
-            h: next.restoreH ?? next.h,
-          };
-        }
+    const saved = localStorage.getItem("hdv-dockview-layout");
+    if (saved) {
+      try {
+        event.api.fromJSON(JSON.parse(saved));
+      } catch {
+        setupDefaultLayout(event.api);
       }
-      return next;
-    },
-    [selectedItems.length],
-  );
-
-  const setSidebarLayout = useCallback(
-    (value: PanelLayout | ((prev: PanelLayout) => PanelLayout)) => {
-      rawSetSidebarLayout((prev) => {
-        const next = typeof value === "function" ? value(prev) : value;
-        if (next.visible && !prev.visible) {
-          return adjustLayoutForAppearance(
-            "sidebar",
-            next,
-            prev,
-            inspectorLayout,
-            infoPanelLayout,
-          );
-        }
-        return next;
-      });
-    },
-    [inspectorLayout, infoPanelLayout, adjustLayoutForAppearance],
-  );
-
-  const setInspectorLayout = useCallback(
-    (value: PanelLayout | ((prev: PanelLayout) => PanelLayout)) => {
-      rawSetInspectorLayout((prev) => {
-        const next = typeof value === "function" ? value(prev) : value;
-        if (next.visible && !prev.visible) {
-          return adjustLayoutForAppearance(
-            "inspector",
-            next,
-            sidebarLayout,
-            prev,
-            infoPanelLayout,
-          );
-        }
-        return next;
-      });
-    },
-    [sidebarLayout, infoPanelLayout, adjustLayoutForAppearance],
-  );
-
-  const setInfoPanelLayout = useCallback(
-    (value: PanelLayout | ((prev: PanelLayout) => PanelLayout)) => {
-      rawSetInfoPanelLayout((prev) => {
-        const next = typeof value === "function" ? value(prev) : value;
-        if (next.visible && !prev.visible) {
-          return adjustLayoutForAppearance(
-            "info-panel",
-            next,
-            sidebarLayout,
-            inspectorLayout,
-            prev,
-          );
-        }
-        return next;
-      });
-    },
-    [sidebarLayout, inspectorLayout, adjustLayoutForAppearance],
-  );
-
-  const getPanelStackFlags = (panelId: string) => {
-    const layout = getPanelLayout(panelId);
-    if (!layout.isDocked || !layout.visible) {
-      return { isOnlyInColumn: true, isLastInColumn: false };
-    }
-
-    const zone = layout.zone;
-    const col = layout.dockColumn;
-    const colPanels = [
-      { id: "sidebar", layout: sidebarLayout },
-      { id: "inspector", layout: inspectorLayout },
-      { id: "info-panel", layout: infoPanelLayout },
-    ].filter(
-      (p) =>
-        p.layout.isDocked &&
-        p.layout.zone === zone &&
-        p.layout.dockColumn === col &&
-        p.layout.visible &&
-        (p.id !== "info-panel" || selectedItems.length > 0),
-    );
-
-    colPanels.sort((a, b) => (a.layout.dockRow ?? 0) - (b.layout.dockRow ?? 0));
-
-    const isOnly = colPanels.length === 1;
-    const idx = colPanels.findIndex((p) => p.id === panelId);
-    const isLast = idx === colPanels.length - 1;
-
-    return { isOnlyInColumn: isOnly, isLastInColumn: isLast };
-  };
-
-  const applyLayoutUpdates = (
-    updates: Record<string, Partial<PanelLayout>>,
-  ) => {
-    const nextSidebar = {
-      ...sidebarLayout,
-      ...(updates.sidebar || updates["sidebar"]),
-    };
-    const nextInspector = {
-      ...inspectorLayout,
-      ...(updates.inspector || updates["inspector"]),
-    };
-    const nextInfoPanel = {
-      ...infoPanelLayout,
-      ...(updates.info || updates["info-panel"]),
-    };
-
-    const normalized = normalizeDockLayouts(
-      nextSidebar,
-      nextInspector,
-      nextInfoPanel,
-      selectedItems.length > 0,
-    );
-
-    setSidebarLayout(normalized.sidebar);
-    setInspectorLayout(normalized.inspector);
-    setInfoPanelLayout(normalized.info);
-  };
-
-  const handlePanelLayoutChange = (id: string, nextLayout: PanelLayout) => {
-    if (nextLayout.isDocked) {
-      const zone = nextLayout.zone;
-      const col = nextLayout.dockColumn;
-
-      const updates: Record<string, Partial<PanelLayout>> = {
-        [id]: nextLayout,
-      };
-
-      if (zone === "dock-left" || zone === "dock-right") {
-        // Find panels in the same column
-        const colPanels = [
-          { id: "sidebar", layout: sidebarLayout },
-          { id: "inspector", layout: inspectorLayout },
-          { id: "info-panel", layout: infoPanelLayout },
-        ].filter(
-          (p) =>
-            p.layout.isDocked &&
-            p.layout.zone === zone &&
-            p.layout.dockColumn === col &&
-            p.layout.visible &&
-            (p.id !== "info-panel" || selectedItems.length > 0),
-        );
-
-        // Sort by dockRow
-        colPanels.sort(
-          (a, b) => (a.layout.dockRow ?? 0) - (b.layout.dockRow ?? 0),
-        );
-
-        // Find index of the panel being resized
-        const idx = colPanels.findIndex((p) => p.id === id);
-
-        // If it is not the last panel, we resize it against the panel below it
-        if (idx !== -1 && idx < colPanels.length - 1) {
-          const currentPanel = colPanels[idx];
-          const nextPanel = colPanels[idx + 1];
-
-          const currentLayout = currentPanel.layout;
-          const nextLayoutObj = getPanelLayout(nextPanel.id);
-
-          const minHeightCurrent =
-            currentPanel.id === "sidebar"
-              ? 120
-              : currentPanel.id === "inspector"
-                ? 120
-                : 120;
-          const minHeightNext =
-            nextPanel.id === "sidebar"
-              ? 120
-              : nextPanel.id === "inspector"
-                ? 120
-                : 120;
-
-          let requestedH = Math.max(minHeightCurrent, nextLayout.h);
-          let diff = requestedH - currentLayout.h;
-
-          let newNextH = nextLayoutObj.h - diff;
-          if (newNextH < minHeightNext) {
-            newNextH = minHeightNext;
-            diff = nextLayoutObj.h - minHeightNext;
-            requestedH = currentLayout.h + diff;
-          }
-
-          updates[id] = { ...nextLayout, h: requestedH };
-          updates[nextPanel.id] = { ...nextLayoutObj, h: newNextH };
-        }
-
-        // Horizontal column-to-column resizing: resize against the adjacent column complementarily
-        const currentLayout = getPanelLayout(id);
-        const diffW = nextLayout.w - currentLayout.w;
-
-        if (diffW !== 0) {
-          const targetCol = zone === "dock-left" ? col + 1 : col - 1;
-          const adjacentPanels = [
-            { id: "sidebar", layout: sidebarLayout },
-            { id: "inspector", layout: inspectorLayout },
-            { id: "info-panel", layout: infoPanelLayout },
-          ].filter(
-            (p) =>
-              p.layout.isDocked &&
-              p.layout.zone === zone &&
-              p.layout.dockColumn === targetCol &&
-              p.layout.visible &&
-              (p.id !== "info-panel" || selectedItems.length > 0),
-          );
-
-          if (adjacentPanels.length > 0) {
-            const adjacentW = adjacentPanels[0].layout.w;
-            const minAdjacentW = Math.max(
-              ...adjacentPanels.map((p) =>
-                p.id === "sidebar" ? 180 : p.id === "inspector" ? 240 : 220,
-              ),
-            );
-            const minCurrentW =
-              id === "sidebar" ? 180 : id === "inspector" ? 240 : 220;
-
-            let requestedW = Math.max(minCurrentW, nextLayout.w);
-            let actualDiff = requestedW - currentLayout.w;
-            let newAdjacentW = adjacentW - actualDiff;
-
-            if (newAdjacentW < minAdjacentW) {
-              newAdjacentW = minAdjacentW;
-              actualDiff = adjacentW - minAdjacentW;
-              requestedW = currentLayout.w + actualDiff;
-            }
-
-            nextLayout.w = requestedW;
-            updates[id] = { ...nextLayout };
-
-            adjacentPanels.forEach((ap) => {
-              const apLayout = getPanelLayout(ap.id);
-              updates[ap.id] = {
-                ...updates[ap.id],
-                ...apLayout,
-                w: newAdjacentW,
-              };
-            });
-          }
-        }
-
-        // Also synchronize the width across all panels in this column
-        const otherPanelIds = ["sidebar", "inspector", "info-panel"].filter(
-          (pId) => pId !== id,
-        );
-        for (const pId of otherPanelIds) {
-          const l = getPanelLayout(pId);
-          if (l.isDocked && l.zone === zone && l.dockColumn === col) {
-            updates[pId] = {
-              ...updates[pId],
-              ...l,
-              w: nextLayout.w,
-            };
-          }
-        }
-      }
-
-      applyLayoutUpdates(updates);
     } else {
-      applyLayoutUpdates({ [id]: nextLayout });
+      setupDefaultLayout(event.api);
     }
+
+    event.api.onDidLayoutChange(() => {
+      const sidebar = event.api.getPanel("sidebar");
+      const inspector = event.api.getPanel("inspector");
+      const infoPanel = event.api.getPanel("infoPanel");
+
+      setSidebarVisible(!!sidebar && sidebar.api.isVisible);
+      setInspectorVisible(!!inspector && inspector.api.isVisible);
+      setInfoPanelVisible(!!infoPanel && infoPanel.api.isVisible);
+
+      const layout = event.api.toJSON();
+      localStorage.setItem("hdv-dockview-layout", JSON.stringify(layout));
+    });
   };
 
-  const leftDockWidth = useMemo(() => {
-    const cols = new Set<number>();
-    let totalW = 0;
+  const setupDefaultLayout = (api: DockviewApi) => {
+    api.clear();
 
-    if (
-      sidebarLayout.isDocked &&
-      sidebarLayout.visible &&
-      sidebarLayout.zone === "dock-left"
-    ) {
-      cols.add(sidebarLayout.dockColumn);
-    }
-    if (
-      inspectorLayout.isDocked &&
-      inspectorLayout.visible &&
-      inspectorLayout.zone === "dock-left"
-    ) {
-      cols.add(inspectorLayout.dockColumn);
-    }
-    if (
-      infoPanelLayout.isDocked &&
-      infoPanelLayout.visible &&
-      selectedItems.length > 0 &&
-      infoPanelLayout.zone === "dock-left"
-    ) {
-      cols.add(infoPanelLayout.dockColumn);
-    }
-
-    cols.forEach((col) => {
-      let colW = 0;
-      if (
-        sidebarLayout.isDocked &&
-        sidebarLayout.visible &&
-        sidebarLayout.zone === "dock-left" &&
-        sidebarLayout.dockColumn === col
-      ) {
-        colW = Math.max(colW, sidebarLayout.w);
-      }
-      if (
-        inspectorLayout.isDocked &&
-        inspectorLayout.visible &&
-        inspectorLayout.zone === "dock-left" &&
-        inspectorLayout.dockColumn === col
-      ) {
-        colW = Math.max(colW, inspectorLayout.w);
-      }
-      if (
-        infoPanelLayout.isDocked &&
-        infoPanelLayout.visible &&
-        selectedItems.length > 0 &&
-        infoPanelLayout.zone === "dock-left" &&
-        infoPanelLayout.dockColumn === col
-      ) {
-        colW = Math.max(colW, infoPanelLayout.w);
-      }
-      totalW += colW;
+    api.addPanel({
+      id: "canvas",
+      component: "canvas",
+      title: "Canvas",
     });
 
-    return totalW;
-  }, [sidebarLayout, inspectorLayout, infoPanelLayout, selectedItems]);
-
-  const rightDockWidth = useMemo(() => {
-    const cols = new Set<number>();
-    let totalW = 0;
-
-    if (
-      sidebarLayout.isDocked &&
-      sidebarLayout.visible &&
-      sidebarLayout.zone === "dock-right"
-    ) {
-      cols.add(sidebarLayout.dockColumn);
-    }
-    if (
-      inspectorLayout.isDocked &&
-      inspectorLayout.visible &&
-      inspectorLayout.zone === "dock-right"
-    ) {
-      cols.add(inspectorLayout.dockColumn);
-    }
-    if (
-      infoPanelLayout.isDocked &&
-      infoPanelLayout.visible &&
-      selectedItems.length > 0 &&
-      infoPanelLayout.zone === "dock-right"
-    ) {
-      cols.add(infoPanelLayout.dockColumn);
-    }
-
-    cols.forEach((col) => {
-      let colW = 0;
-      if (
-        sidebarLayout.isDocked &&
-        sidebarLayout.visible &&
-        sidebarLayout.zone === "dock-right" &&
-        sidebarLayout.dockColumn === col
-      ) {
-        colW = Math.max(colW, sidebarLayout.w);
-      }
-      if (
-        inspectorLayout.isDocked &&
-        inspectorLayout.visible &&
-        inspectorLayout.zone === "dock-right" &&
-        inspectorLayout.dockColumn === col
-      ) {
-        colW = Math.max(colW, inspectorLayout.w);
-      }
-      if (
-        infoPanelLayout.isDocked &&
-        infoPanelLayout.visible &&
-        selectedItems.length > 0 &&
-        infoPanelLayout.zone === "dock-right" &&
-        infoPanelLayout.dockColumn === col
-      ) {
-        colW = Math.max(colW, infoPanelLayout.w);
-      }
-      totalW += colW;
+    api.addPanel({
+      id: "sidebar",
+      component: "sidebar",
+      title: "Navigator",
+      position: {
+        referencePanel: "canvas",
+        direction: "left",
+      },
+      initialWidth: 220,
+      minimumWidth: 180,
     });
 
-    return totalW;
-  }, [sidebarLayout, inspectorLayout, infoPanelLayout, selectedItems]);
+    api.addPanel({
+      id: "inspector",
+      component: "inspector",
+      title: "Inspector",
+      position: {
+        referencePanel: "canvas",
+        direction: "right",
+      },
+      initialWidth: 280,
+      minimumWidth: 240,
+    });
+  };
+
+  const togglePanelVisible = (id: string) => {
+    if (!dockviewApi) return;
+    const panel = dockviewApi.getPanel(id);
+    if (panel) {
+      panel.api.close();
+    } else {
+      if (id === "sidebar") {
+        dockviewApi.addPanel({
+          id: "sidebar",
+          component: "sidebar",
+          title: "Navigator",
+          position: {
+            referencePanel: "canvas",
+            direction: "left",
+          },
+          initialWidth: 220,
+          minimumWidth: 180,
+        });
+      } else if (id === "inspector") {
+        dockviewApi.addPanel({
+          id: "inspector",
+          component: "inspector",
+          title: "Inspector",
+          position: {
+            referencePanel: "canvas",
+            direction: "right",
+          },
+          initialWidth: 280,
+          minimumWidth: 240,
+        });
+      } else if (id === "infoPanel") {
+        dockviewApi.addPanel({
+          id: "infoPanel",
+          component: "infoPanel",
+          title: "Selection References",
+          floating: {
+            x: 300,
+            y: window.innerHeight - 250,
+            width: 320,
+            height: 180,
+          },
+        });
+      }
+    }
+  };
 
   const [destinationsExpanded, setDestinationsExpanded] = useState(() => {
     const v = localStorage.getItem("hdv-acc-destinations");
@@ -699,6 +374,89 @@ function App() {
     return () => clearTimeout(timer);
   }, []);
 
+  const fitToWorkspaceRef = useRef<() => void>(() => {});
+  const fitDocumentToWorkspaceRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    if (!activeDocument) return;
+    const frame = frameRef.current?.getShellElement();
+    if (!frame) return;
+    const workspace = frame.parentElement;
+    if (!workspace) return;
+
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    
+    const fitToWorkspace = () => {
+      const resolved = resolvePageSize(settings);
+      const pageWidth = cssLengthToPx(resolved.width);
+      const pageHeight = cssLengthToPx(resolved.height);
+      if (!Number.isFinite(pageWidth) || !Number.isFinite(pageHeight) || pageWidth <= 0 || pageHeight <= 0) {
+        return;
+      }
+      const styles = window.getComputedStyle(workspace);
+      const padX = parseFloat(styles.paddingLeft || "0") + parseFloat(styles.paddingRight || "0");
+      const padY = parseFloat(styles.paddingTop || "0") + parseFloat(styles.paddingBottom || "0");
+      const availableW = workspace.clientWidth - padX;
+      const availableH = workspace.clientHeight - padY;
+      if (availableW <= 0 || availableH <= 0) return;
+      const fit = Math.min(availableW / pageWidth, availableH / pageHeight, 1);
+      const next = Math.max(0.2, Math.min(2, Number(fit.toFixed(3))));
+      setSlideScale((prev) => (Math.abs(prev - next) < 0.005 ? prev : next));
+    };
+
+    const fitDocumentToWorkspace = () => {
+      const resolved = resolvePageSize(settings);
+      // Paged.js pages padding (34px left/right = 68px)
+      const pageWidth = cssLengthToPx(resolved.width) + 68;
+      if (!Number.isFinite(pageWidth) || pageWidth <= 0) {
+        return;
+      }
+      const styles = window.getComputedStyle(workspace);
+      const padX = parseFloat(styles.paddingLeft || "0") + parseFloat(styles.paddingRight || "0");
+      const availableW = workspace.clientWidth - padX;
+      if (availableW <= 0) return;
+      const fit = Math.min(availableW / pageWidth, 1);
+      const next = Math.max(0.2, Math.min(1.2, Number(fit.toFixed(3))));
+      setDocScale((prev) => (Math.abs(prev - next) < 0.005 ? prev : next));
+    };
+
+    fitToWorkspaceRef.current = fitToWorkspace;
+    fitDocumentToWorkspaceRef.current = fitDocumentToWorkspace;
+
+    const fit = () => {
+      if (slideDeckMode) {
+        fitToWorkspace();
+      } else {
+        fitDocumentToWorkspace();
+      }
+    };
+
+    const debouncedFit = () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        resizeTimer = null;
+        fit();
+      }, 120);
+    };
+
+    // Initial fit
+    fit();
+
+    // Use ResizeObserver to observe workspace layout changes (e.g. docking sidebar/inspector)
+    const observer = new ResizeObserver(() => {
+      fit();
+    });
+    observer.observe(workspace);
+
+    window.addEventListener("resize", debouncedFit);
+    return () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      window.removeEventListener("resize", debouncedFit);
+      observer.disconnect();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slideDeckMode, activeDocument?.id, settings.pageSizePreset, settings.orientation, settings.width, settings.height]);
+
   // Disable browser right-click menu globally in the main window
   useEffect(() => {
     const handleGlobalContextMenu = (e: MouseEvent) => {
@@ -758,6 +516,25 @@ function App() {
     }
   }, [accent, theme]);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      }
+      if (
+        ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") ||
+        ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "z")
+      ) {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [past, future]);
+
   const [ancestors, setAncestors] = useState<
     Array<{ tag: string; path: string; label: string }>
   >([]);
@@ -808,9 +585,19 @@ function App() {
       if (frameRef.current) {
         setAncestors(frameRef.current.getAncestors(items[0].path));
       }
-      setInfoPanelLayout((prev) =>
-        prev.visible ? prev : { ...prev, visible: true },
-      );
+      if (dockviewApi && !dockviewApi.getPanel("infoPanel")) {
+        dockviewApi.addPanel({
+          id: "infoPanel",
+          component: "infoPanel",
+          title: "Selection References",
+          floating: {
+            x: 300,
+            y: window.innerHeight - 250,
+            width: 320,
+            height: 180,
+          },
+        });
+      }
     } else {
       setAncestors([]);
     }
@@ -829,14 +616,12 @@ function App() {
         },
         { divider: true },
         {
-          label: sidebarLayout.visible ? "Hide Sidebar" : "Show Sidebar",
-          onClick: () =>
-            setSidebarLayout((prev) => ({ ...prev, visible: !prev.visible })),
+          label: sidebarVisible ? "Hide Sidebar" : "Show Sidebar",
+          onClick: () => togglePanelVisible("sidebar"),
         },
         {
-          label: inspectorLayout.visible ? "Hide Inspector" : "Show Inspector",
-          onClick: () =>
-            setInspectorLayout((prev) => ({ ...prev, visible: !prev.visible })),
+          label: inspectorVisible ? "Hide Inspector" : "Show Inspector",
+          onClick: () => togglePanelVisible("inspector"),
         },
         { divider: true },
         {
@@ -1169,10 +954,37 @@ function App() {
   }, [templates, librarySearch]);
 
   const pendingCount = Object.keys(pendingEdits).length;
-  const hasUnsavedChanges = pendingCount > 0 || settingsDirty;
+  const hasUnsavedChanges = pendingCount > 0 || settingsDirty || pendingGlobalStyle !== null;
   const activeTemplate = templates.find(
     (template) => template.id === selectedTemplateId,
   );
+
+  // Show/hide selection info panel dynamically based on selections
+  useEffect(() => {
+    if (!dockviewApi) return;
+    const panel = dockviewApi.getPanel("infoPanel");
+    if (selectedItems.length > 0) {
+      if (!panel) {
+        dockviewApi.addPanel({
+          id: "infoPanel",
+          component: "infoPanel",
+          title: "Selection References",
+          floating: {
+            x: 300,
+            y: window.innerHeight - 250,
+            width: 320,
+            height: 180,
+          },
+        });
+      } else {
+        (panel.api as any).setVisible(true);
+      }
+    } else {
+      if (panel) {
+        (panel.api as any).setVisible(false);
+      }
+    }
+  }, [selectedItems, dockviewApi]);
 
   async function runTask(
     successMessage: string,
@@ -1201,10 +1013,25 @@ function App() {
       setSettings(detail.settings);
       setSettingsDirty(false);
       setPendingEdits({});
+      setGlobalStyle(detail.globalStyle || "");
+      setPendingGlobalStyle(null);
+      
+      const initialSnapshot: HistorySnapshot = {
+        pendingEdits: {},
+        settings: detail.settings,
+        settingsDirty: false,
+        pendingGlobalStyle: null,
+      };
+      setPast([initialSnapshot]);
+      setFuture([]);
+      
       setSelectedItems([]);
       setAncestors([]);
       setReloadToken((value) => value + 1);
       setActiveView("editor");
+      setCurrentSlideIndex(0);
+      setSlideScale(1.0);
+      setDiscoveredSlides([]);
       return `Opened ${detail.relativePath}`;
     });
   }
@@ -1271,7 +1098,16 @@ function App() {
     setSettings(nextSettings);
     setSettingsDirty(true);
     frameRef.current?.applyDocumentSettings(nextSettings);
+    pushToHistory(pendingEdits, nextSettings, true, pendingGlobalStyle, true);
   }
+
+  const handleGlobalStyleChange = (css: string) => {
+    setPendingGlobalStyle(css);
+    if (frameRef.current) {
+      frameRef.current.applyGlobalStyle(css);
+    }
+    pushToHistory(pendingEdits, settings, settingsDirty, css, false);
+  };
 
   function handleElementEdit(edit: Omit<ElementEdit, "targetPath">) {
     if (!selectedItems.length) {
@@ -1280,11 +1116,14 @@ function App() {
 
     const nextPending = { ...pendingEdits };
     for (const item of selectedItems) {
-      const fullEdit: ElementEdit = { ...edit, targetPath: item.path };
+      const fullEdit: ElementEdit = { ...edit, targetPath: item.path, selector: item.selector };
       frameRef.current?.applyElementEdit(fullEdit);
       nextPending[item.path] = mergeEdits(nextPending[item.path], fullEdit);
     }
     setPendingEdits(nextPending);
+
+    const isText = typeof edit.textContent === "string";
+    pushToHistory(nextPending, settings, settingsDirty, pendingGlobalStyle, !isText);
   }
 
   function discardLocalChanges() {
@@ -1293,8 +1132,17 @@ function App() {
     }
     setPendingEdits({});
     setSettingsDirty(false);
+    setPendingGlobalStyle(null);
     setSelectedItems([]);
     setReloadToken((value) => value + 1);
+    
+    if (past.length > 0) {
+      setPast([past[0]]);
+    } else {
+      setPast([]);
+    }
+    setFuture([]);
+    
     setStatus("Discarded local changes.");
   }
 
@@ -1306,9 +1154,23 @@ function App() {
       await api.saveEdits(activeDocument.id, {
         elementEdits: Object.values(pendingEdits),
         documentSettings: settingsDirty ? settings : undefined,
+        globalStyle: pendingGlobalStyle !== null ? pendingGlobalStyle : undefined,
       });
       setPendingEdits({});
       setSettingsDirty(false);
+      const finalStyle = pendingGlobalStyle !== null ? pendingGlobalStyle : globalStyle;
+      setGlobalStyle(finalStyle);
+      setPendingGlobalStyle(null);
+      
+      const cleanSnapshot: HistorySnapshot = {
+        pendingEdits: {},
+        settings: settings,
+        settingsDirty: false,
+        pendingGlobalStyle: null,
+      };
+      setPast([cleanSnapshot]);
+      setFuture([]);
+      
       await openDocument(activeDocument.id, { force: true });
       await refreshDocuments();
       triggerConfetti();
@@ -1437,6 +1299,27 @@ function App() {
     function handleGlobalKeyDown(e: KeyboardEvent) {
       const isMeta = e.metaKey || e.ctrlKey;
 
+      const activeEl = document.activeElement;
+      const isInput = activeEl && (
+        activeEl.tagName === "INPUT" ||
+        activeEl.tagName === "TEXTAREA" ||
+        activeEl.hasAttribute("contenteditable") ||
+        (activeEl as HTMLElement).isContentEditable
+      );
+
+      if (slideDeckMode && discoveredSlides.length > 0 && !isInput) {
+        if (e.key === "ArrowRight" || e.key === "PageDown" || (e.key === " " && !e.shiftKey)) {
+          e.preventDefault();
+          setCurrentSlideIndex((prev) => Math.min(discoveredSlides.length - 1, prev + 1));
+          return;
+        }
+        if (e.key === "ArrowLeft" || e.key === "PageUp" || (e.key === " " && e.shiftKey)) {
+          e.preventDefault();
+          setCurrentSlideIndex((prev) => Math.max(0, prev - 1));
+          return;
+        }
+      }
+
       if (isMeta && e.key.toLowerCase() === "n") {
         e.preventDefault();
         setIsNewDocModalOpen(true);
@@ -1475,17 +1358,17 @@ function App() {
 
       if (isMeta && e.shiftKey && e.key.toLowerCase() === "l") {
         e.preventDefault();
-        setSidebarLayout((prev) => ({ ...prev, visible: !prev.visible }));
+        togglePanelVisible("sidebar");
       }
 
       if (isMeta && e.shiftKey && e.key.toLowerCase() === "r") {
         e.preventDefault();
-        setInspectorLayout((prev) => ({ ...prev, visible: !prev.visible }));
+        togglePanelVisible("inspector");
       }
 
       if (isMeta && e.shiftKey && e.key.toLowerCase() === "i") {
         e.preventDefault();
-        setInfoPanelLayout((prev) => ({ ...prev, visible: !prev.visible }));
+        togglePanelVisible("infoPanel");
       }
     }
 
@@ -1498,9 +1381,12 @@ function App() {
     settings,
     pendingEdits,
     settingsDirty,
-    sidebarLayout,
-    inspectorLayout,
-    infoPanelLayout,
+    sidebarVisible,
+    inspectorVisible,
+    infoPanelVisible,
+    slideDeckMode,
+    discoveredSlides,
+    togglePanelVisible,
   ]);
 
   const allCommands = (() => {
@@ -1540,28 +1426,61 @@ function App() {
         label: "Toggle Navigator (Sidebar)",
         category: "View",
         shortcut: "⌘⇧L",
-        action: () =>
-          setSidebarLayout((prev) => ({ ...prev, visible: !prev.visible })),
+        action: () => togglePanelVisible("sidebar"),
       },
       {
         label: "Toggle Inspector",
         category: "View",
         shortcut: "⌘⇧R",
-        action: () =>
-          setInspectorLayout((prev) => ({ ...prev, visible: !prev.visible })),
+        action: () => togglePanelVisible("inspector"),
       },
       {
         label: "Toggle Selection Info Panel",
         category: "View",
         shortcut: "⌘⇧I",
-        action: () =>
-          setInfoPanelLayout((prev) => ({ ...prev, visible: !prev.visible })),
+        action: () => togglePanelVisible("infoPanel"),
       },
       {
         label: "Toggle Zen Mode",
         category: "View",
         shortcut: "⌘.",
         action: () => setZenMode((z) => !z),
+      },
+      {
+        label: "Toggle Slide Deck View",
+        category: "Presentation",
+        action: () => {
+          setSettings((prev) => {
+            const nextPreset: "A4" | "Letter" | "Legal" | "Slide16_9" | "Custom" = prev.pageSizePreset === "Slide16_9" ? "A4" : "Slide16_9";
+            const orient = prev.orientation;
+            const next = { ...prev, pageSizePreset: nextPreset };
+            if (nextPreset === "Slide16_9") {
+              next.width = "297mm";
+              next.height = "167mm";
+            } else {
+              next.width = orient === "landscape" ? "297mm" : "210mm";
+              next.height = orient === "landscape" ? "210mm" : "297mm";
+            }
+            setSettingsDirty(true);
+            return next;
+          });
+        },
+      },
+      {
+        label: "Next Slide",
+        category: "Presentation",
+        shortcut: "→ / Space",
+        action: () => {
+          setCurrentSlideIndex((prev) => Math.min(discoveredSlides.length - 1, prev + 1));
+        },
+      },
+      {
+        label: "Previous Slide",
+        category: "Presentation",
+        shortcut: "← / Shift+Space",
+        action: () => {
+          setCurrentSlideIndex((prev) => Math.max(0, prev - 1));
+        },
       },
       {
         label: "Export Document to HTML",
@@ -1692,453 +1611,194 @@ function App() {
 
   function renderLibraryScreen() {
     return (
-      <div className="library-screen-container">
-        {/* Center Canvas Grid */}
-        <div className="library-grid-column">
-          <div className="library-grid-header">
-            <div>
-              <h2>Components Library</h2>
-              <span>
-                {filteredTemplates.length} templates saved in this workspace
-              </span>
-            </div>
-
-            <div className="library-search-box">
-              <Search size={12} />
-              <input
-                value={librarySearch}
-                onChange={(event) => setLibrarySearch(event.target.value)}
-                placeholder="Search components by name or content…"
-              />
-            </div>
-          </div>
-
-          <div className="library-cards-scroll">
-            <div className="library-cards-grid">
-              {filteredTemplates.map((template) => (
-                <div
-                  key={template.id}
-                  className={
-                    template.id === selectedTemplateId
-                      ? "library-card-item library-card-item--active"
-                      : "library-card-item"
-                  }
-                  onClick={() => handleTemplateSelection(template.id)}
-                  onContextMenu={(e) => handleTemplateContextMenu(e, template)}
-                  onDoubleClick={() => {
-                    handleTemplateSelection(template.id);
-                    setActiveView("editor");
-                  }}
-                >
-                  <div className="library-card-preview">
-                    <FileText size={28} />
-                    <div className="card-html-badge">HTML</div>
-                  </div>
-                  <div className="library-card-meta">
-                    <strong>{template.name}</strong>
-                    <span>
-                      {template.previewText || "No text preview available"}
-                    </span>
-                    <small>
-                      {template.sourceDocumentPath || "Saved template"}
-                    </small>
-                  </div>
-                </div>
-              ))}
-              {filteredTemplates.length === 0 && (
-                <div className="library-empty-grid">
-                  <Library size={36} />
-                  <strong>No components found</strong>
-                  <span>
-                    Save components from the document editor workspace to see
-                    them here.
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Right Details Pane (Xcode Style Inspector) */}
-        <aside className="library-inspector-column">
-          <div className="inspector-header-title">
-            <span>Component Properties</span>
-          </div>
-
-          {activeTemplate ? (
-            <div className="library-inspector-scroll">
-              <section className="library-inspector-section">
-                <h3>Identity</h3>
-                <div className="property-list">
-                  <div className="property-row">
-                    <span>Name</span>
-                    <strong>{activeTemplate.name}</strong>
-                  </div>
-                  <div className="property-row">
-                    <span>Source doc</span>
-                    <strong>
-                      {activeTemplate.sourceDocumentPath || "Unknown"}
-                    </strong>
-                  </div>
-                  <div className="property-row">
-                    <span>Snippet size</span>
-                    <strong>{activeTemplate.html.length} bytes</strong>
-                  </div>
-                </div>
-              </section>
-
-              <section className="library-inspector-section">
-                <h3>Rename Component</h3>
-                <label className="field">
-                  <span>Name</span>
-                  <input
-                    value={renameTemplateName}
-                    onChange={(event) =>
-                      setRenameTemplateName(event.target.value)
-                    }
-                    placeholder="Enter new template name…"
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  style={{ width: "100%", minHeight: 28, fontSize: 11 }}
-                  disabled={!renameTemplateName.trim()}
-                  onClick={renameTemplate}
-                >
-                  Rename Component
-                </button>
-              </section>
-
-              <section className="library-inspector-section">
-                <h3>HTML Source Code</h3>
-                <div className="library-code-wrapper">
-                  <pre>
-                    <code>{activeTemplate.html}</code>
-                  </pre>
-                </div>
-              </section>
-
-              <section
-                className="library-inspector-section"
-                style={{ borderBottom: "none", marginTop: "auto" }}
-              >
-                <div className="split-actions">
-                  <button
-                    type="button"
-                    className="primary-button"
-                    style={{ flex: 1, minHeight: 28, fontSize: 11 }}
-                    onClick={() => setActiveView("editor")}
-                  >
-                    Open in Editor
-                  </button>
-                  <button
-                    type="button"
-                    className="button--danger"
-                    style={{
-                      minHeight: 28,
-                      fontSize: 11,
-                      padding: "0 10px",
-                      width: "auto",
-                    }}
-                    onClick={deleteTemplate}
-                  >
-                    Delete
-                  </button>
-                </div>
-              </section>
-            </div>
-          ) : (
-            <div className="library-inspector-empty">
-              <Library size={24} />
-              <span>Select a template component card to view details.</span>
-            </div>
-          )}
-        </aside>
-      </div>
+      <LibraryScreen
+        filteredTemplates={filteredTemplates}
+        selectedTemplateId={selectedTemplateId}
+        activeTemplate={activeTemplate}
+        librarySearch={librarySearch}
+        renameTemplateName={renameTemplateName}
+        onLibrarySearchChange={setLibrarySearch}
+        onTemplateSelect={handleTemplateSelection}
+        onTemplateContextMenu={handleTemplateContextMenu}
+        onRenameTemplateNameChange={setRenameTemplateName}
+        onRenameTemplate={() => void renameTemplate()}
+        onDeleteTemplate={() => void deleteTemplate()}
+        onReturnToEditor={() => setActiveView("editor")}
+      />
     );
   }
 
   function renderSettingsScreen() {
     return (
-      <div className="settings-screen-container">
-        <div className="settings-grid-column">
-          <div className="settings-header">
-            <h2>Preferences</h2>
-            <span>
-              Configure security parameters, interface styling, and theme
-              preferences
-            </span>
-          </div>
-
-          <div className="settings-content-scroll">
-            <div className="settings-form-box">
-              <h3>Remote Security Settings</h3>
-              <p className="settings-desc">
-                Provide an authorization token to enable write/export options
-                for remote servers.
-              </p>
-              <div className="settings-row-input">
-                <input
-                  value={tokenInput}
-                  type="password"
-                  onChange={(event) => updateToken(event.target.value)}
-                  placeholder="Enter remote secure access token…"
-                  style={{ maxWidth: 360 }}
-                />
-              </div>
-
-              <div className="settings-divider" />
-
-              <h3>Interface Customization</h3>
-              <p className="settings-desc">
-                Change the interface theme and accent highlight.
-              </p>
-              <div
-                style={{
-                  display: "flex",
-                  gap: 24,
-                  marginTop: 12,
-                  marginBottom: 16,
-                }}
-              >
-                <Field label="System Accent">
-                  <select
-                    value={accent}
-                    onChange={(e) =>
-                      setAccent(
-                        e.target.value as
-                          | "blue"
-                          | "purple"
-                          | "teal"
-                          | "orange"
-                          | "rose",
-                      )
-                    }
-                    style={{ minWidth: 160 }}
-                  >
-                    <option value="blue">Blue (Apple Default)</option>
-                    <option value="purple">Purple (Vibrant)</option>
-                    <option value="teal">Teal (Ocean)</option>
-                    <option value="orange">Orange (Warm)</option>
-                    <option value="rose">Rose (Sunset)</option>
-                  </select>
-                </Field>
-
-                <Field label="System Theme">
-                  <select
-                    value={theme}
-                    onChange={(e) =>
-                      setTheme(
-                        e.target.value as
-                          | "system"
-                          | "dark"
-                          | "light"
-                          | "true-black",
-                      )
-                    }
-                    style={{ minWidth: 160 }}
-                  >
-                    <option value="system">System Default</option>
-                    <option value="dark">macOS Dark</option>
-                    <option value="light">macOS Light</option>
-                    <option value="true-black">OLED True Black</option>
-                  </select>
-                </Field>
-              </div>
-
-              <div className="settings-divider" />
-
-              <h3>Status Info</h3>
-              <div className="settings-info-grid">
-                <div className="info-row">
-                  <span>Active Documents</span>
-                  <strong>{documents.length} files loaded</strong>
-                </div>
-                <div className="info-row">
-                  <span>Template Components</span>
-                  <strong>{templates.length} elements saved</strong>
-                </div>
-              </div>
-
-              <div className="settings-divider" />
-
-              <div className="settings-actions-bar">
-                <button
-                  type="button"
-                  className="secondary-button"
-                  style={{ width: "auto" }}
-                  onClick={() => setActiveView("editor")}
-                >
-                  Return to Document Editor
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      <SettingsScreen
+        tokenInput={tokenInput}
+        onTokenChange={updateToken}
+        accent={accent}
+        theme={theme}
+        onAccentChange={setAccent}
+        onThemeChange={setTheme}
+        documentCount={documents.length}
+        templateCount={templates.length}
+        onReturnToEditor={() => setActiveView("editor")}
+      />
     );
   }
 
   const cascadeFloatingPanels = () => {
-    const visiblePanels = [
-      { id: "sidebar", layout: sidebarLayout, set: setSidebarLayout },
-      { id: "inspector", layout: inspectorLayout, set: setInspectorLayout },
-      { id: "info-panel", layout: infoPanelLayout, set: setInfoPanelLayout },
-    ].filter(
-      (p) =>
-        p.layout.visible && (p.id !== "info-panel" || selectedItems.length > 0),
-    );
-
-    visiblePanels.forEach((p, idx) => {
-      p.set({
-        ...p.layout,
-        isDocked: false,
-        maximized: false,
-        w: 320,
-        h: 400,
-        x: 60 + idx * 40,
-        y: 80 + idx * 40,
+    if (!dockviewApi) return;
+    const panelsToFloat = [
+      { id: "sidebar", component: "sidebar", title: "Navigator", defaultW: 240, defaultH: 500 },
+      { id: "inspector", component: "inspector", title: "Inspector", defaultW: 280, defaultH: 500 },
+      ...(selectedItems.length > 0 ? [{ id: "infoPanel", component: "infoPanel", title: "Selection References", defaultW: 320, defaultH: 180 }] : [])
+    ];
+    panelsToFloat.forEach((p, idx) => {
+      const existing = dockviewApi.getPanel(p.id);
+      if (existing) {
+        existing.api.close();
+      }
+      dockviewApi.addPanel({
+        id: p.id,
+        component: p.component,
+        title: p.title,
+        floating: {
+          x: 60 + idx * 40,
+          y: 80 + idx * 40,
+          width: p.defaultW,
+          height: p.defaultH,
+        },
       });
     });
-
     toast("Windows cascaded", "success");
   };
 
   const tileFloatingPanels = () => {
-    const visiblePanels = [
-      { id: "sidebar", layout: sidebarLayout, set: setSidebarLayout },
-      { id: "inspector", layout: inspectorLayout, set: setInspectorLayout },
-      { id: "info-panel", layout: infoPanelLayout, set: setInfoPanelLayout },
-    ].filter(
-      (p) =>
-        p.layout.visible && (p.id !== "info-panel" || selectedItems.length > 0),
-    );
-
-    if (visiblePanels.length === 0) return;
-
-    const N = visiblePanels.length;
+    if (!dockviewApi) return;
+    const panelsToFloat = [
+      { id: "sidebar", component: "sidebar", title: "Navigator" },
+      { id: "inspector", component: "inspector", title: "Inspector" },
+      ...(selectedItems.length > 0 ? [{ id: "infoPanel", component: "infoPanel", title: "Selection References" }] : [])
+    ];
+    const N = panelsToFloat.length;
     const padding = 6;
-    const topOffset = 36; // TOPBAR_H
-    const bottomOffset = 16; // FOOTER_H
-
+    const topOffset = 36;
+    const bottomOffset = 16;
     const w = (window.innerWidth - padding * (N + 1)) / N;
     const h = window.innerHeight - topOffset - bottomOffset - padding * 2;
-
-    visiblePanels.forEach((p, idx) => {
-      p.set({
-        ...p.layout,
-        isDocked: false,
-        maximized: false,
-        w: w,
-        h: h,
-        x: padding + idx * (w + padding),
-        y: topOffset + padding,
+    panelsToFloat.forEach((p, idx) => {
+      const existing = dockviewApi.getPanel(p.id);
+      if (existing) {
+        existing.api.close();
+      }
+      dockviewApi.addPanel({
+        id: p.id,
+        component: p.component,
+        title: p.title,
+        floating: {
+          x: padding + idx * (w + padding),
+          y: topOffset + padding,
+          width: w,
+          height: h,
+        },
       });
     });
-
     toast("Windows tiled", "success");
   };
 
   const dockAllPanels = () => {
-    setSidebarLayout((prev) => ({
-      ...prev,
-      isDocked: true,
-      maximized: false,
-      zone: "dock-left",
-      dockColumn: 0,
-      dockRow: 0,
-    }));
-    setInspectorLayout((prev) => ({
-      ...prev,
-      isDocked: true,
-      maximized: false,
-      zone: "dock-right",
-      dockColumn: 0,
-      dockRow: 0,
-    }));
-    setInfoPanelLayout((prev) => ({
-      ...prev,
-      isDocked: true,
-      maximized: false,
-      zone: "dock-right",
-      dockColumn: 0,
-      dockRow: 0,
-    }));
+    if (!dockviewApi) return;
+    const sidebar = dockviewApi.getPanel("sidebar");
+    const inspector = dockviewApi.getPanel("inspector");
+    const infoPanel = dockviewApi.getPanel("infoPanel");
+    if (sidebar) sidebar.api.close();
+    if (inspector) inspector.api.close();
+    if (infoPanel) infoPanel.api.close();
+    dockviewApi.addPanel({
+      id: "sidebar",
+      component: "sidebar",
+      title: "Navigator",
+      position: {
+        referencePanel: "canvas",
+        direction: "left",
+      },
+      initialWidth: 220,
+      minimumWidth: 180,
+    });
+    dockviewApi.addPanel({
+      id: "inspector",
+      component: "inspector",
+      title: "Inspector",
+      position: {
+        referencePanel: "canvas",
+        direction: "right",
+      },
+      initialWidth: 280,
+      minimumWidth: 240,
+    });
+    if (selectedItems.length > 0) {
+      dockviewApi.addPanel({
+        id: "infoPanel",
+        component: "infoPanel",
+        title: "Selection References",
+        position: {
+          referencePanel: "inspector",
+          direction: "below",
+        },
+        initialHeight: 180,
+        minimumHeight: 100,
+      });
+    }
     toast("All panels docked", "success");
   };
 
   const floatAllPanels = () => {
-    setSidebarLayout((prev) => ({
-      ...prev,
-      isDocked: false,
-      maximized: false,
-      x: 50,
-      y: 80,
-      w: 240,
-      h: 500,
-    }));
-    setInspectorLayout((prev) => ({
-      ...prev,
-      isDocked: false,
-      maximized: false,
-      x: window.innerWidth - 300 - 6,
-      y: 80,
-      w: 280,
-      h: 500,
-    }));
-    setInfoPanelLayout((prev) => ({
-      ...prev,
-      isDocked: false,
-      maximized: false,
-      x: 350,
-      y: 150,
-      w: 320,
-      h: 180,
-    }));
+    if (!dockviewApi) return;
+    const sidebar = dockviewApi.getPanel("sidebar");
+    const inspector = dockviewApi.getPanel("inspector");
+    const infoPanel = dockviewApi.getPanel("infoPanel");
+    if (sidebar) sidebar.api.close();
+    if (inspector) inspector.api.close();
+    if (infoPanel) infoPanel.api.close();
+    dockviewApi.addPanel({
+      id: "sidebar",
+      component: "sidebar",
+      title: "Navigator",
+      floating: {
+        x: 50,
+        y: 80,
+        width: 240,
+        height: 500,
+      },
+    });
+    dockviewApi.addPanel({
+      id: "inspector",
+      component: "inspector",
+      title: "Inspector",
+      floating: {
+        x: window.innerWidth - 300 - 6,
+        y: 80,
+        width: 280,
+        height: 500,
+      },
+    });
+    if (selectedItems.length > 0) {
+      dockviewApi.addPanel({
+        id: "infoPanel",
+        component: "infoPanel",
+        title: "Selection References",
+        floating: {
+          x: 350,
+          y: 150,
+          width: 320,
+          height: 180,
+        },
+      });
+    }
     toast("All panels floated", "success");
   };
 
   const resetWindowLayout = () => {
-    setSidebarLayout({
-      x: 6,
-      y: 42,
-      w: 220,
-      h: window.innerHeight - 36 - 16 - 12,
-      isDocked: true,
-      zone: "dock-left",
-      minimized: false,
-      visible: true,
-      dockColumn: 0,
-      dockRow: 0,
-      maximized: false,
-    });
-    setInspectorLayout({
-      x: window.innerWidth - 280 - 6,
-      y: 42,
-      w: 280,
-      h: window.innerHeight - 36 - 16 - 12,
-      isDocked: true,
-      zone: "dock-right",
-      minimized: false,
-      visible: true,
-      dockColumn: 0,
-      dockRow: 0,
-      maximized: false,
-    });
-    setInfoPanelLayout({
-      x: 300,
-      y: window.innerHeight - 200,
-      w: 320,
-      h: 150,
-      isDocked: false,
-      zone: "free",
-      minimized: false,
-      visible: false,
-      dockColumn: 0,
-      dockRow: 0,
-      maximized: false,
-    });
+    if (!dockviewApi) return;
+    setupDefaultLayout(dockviewApi);
     toast("Window layout reset", "success");
   };
 
@@ -2220,25 +1880,26 @@ function App() {
       items: [
         {
           label: "Navigator (Sidebar)",
-          onClick: () =>
-            setSidebarLayout((prev) => ({ ...prev, visible: !prev.visible })),
+          icon: sidebarVisible ? <Check size={10} /> : undefined,
+          onClick: () => togglePanelVisible("sidebar"),
           shortcut: "⌘⇧L",
         },
         {
           label: "Inspector",
-          onClick: () =>
-            setInspectorLayout((prev) => ({ ...prev, visible: !prev.visible })),
+          icon: inspectorVisible ? <Check size={10} /> : undefined,
+          onClick: () => togglePanelVisible("inspector"),
           shortcut: "⌘⇧R",
         },
         {
           label: "Selection Info Panel",
-          onClick: () =>
-            setInfoPanelLayout((prev) => ({ ...prev, visible: !prev.visible })),
+          icon: infoPanelVisible ? <Check size={10} /> : undefined,
+          onClick: () => togglePanelVisible("infoPanel"),
           shortcut: "⌘⇧I",
         },
         { divider: true },
         {
           label: "Toggle Zen Mode",
+          icon: zenMode ? <Check size={10} /> : undefined,
           onClick: () => setZenMode(!zenMode),
           shortcut: "⌘.",
         },
@@ -2281,464 +1942,79 @@ function App() {
     },
   ];
 
-  const renderSidebar = (isOnlyInColumn = true, isLastInColumn = false) => {
-
-    return (
-      <FloatingPanel
-        id="sidebar"
-        title="Navigator"
-        layout={sidebarLayout}
-        onLayoutChange={(next) => handlePanelLayoutChange("sidebar", next)}
-        allowedZones={["free", "dock-left", "dock-right"]}
-        workspaceRef={shellRef}
-        minWidth={180}
-        minHeight={120}
-        isOnlyInColumn={isOnlyInColumn}
-        isLastInColumn={isLastInColumn}
-      >
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            flex: 1,
-            minHeight: 0,
-          }}
-          onContextMenu={handleSidebarContextMenu}
-        >
-          {/* macOS Sidebar Navigation Categories */}
-          <section
-            className={`sidebar-section sidebar-nav-section ${!destinationsExpanded ? "collapsed" : ""}`}
-            style={{ paddingBottom: destinationsExpanded ? 8 : 6 }}
-          >
-            <div
-              className="section-title section-title-clickable"
-              onClick={() => {
-                const next = !destinationsExpanded;
-                setDestinationsExpanded(next);
-                localStorage.setItem("hdv-acc-destinations", String(next));
-              }}
-            >
-              <div className="section-title-left">
-                {destinationsExpanded ? (
-                  <ChevronDown size={10} />
-                ) : (
-                  <ChevronRight size={10} />
-                )}
-                <span>Views</span>
-              </div>
-            </div>
-            <div
-              className={`sidebar-section-content ${destinationsExpanded ? "expanded" : "collapsed"}`}
-            >
-              <div>
-                <div
-                  className="nav-list"
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 2,
-                    marginTop: 6,
-                  }}
-                >
-                  <button
-                    className={
-                      activeView === "editor"
-                        ? "nav-row nav-row--active"
-                        : "nav-row"
-                    }
-                    onClick={() => setActiveView("editor")}
-                  >
-                    <FileText size={12} />
-                    <span>Document Editor</span>
-                  </button>
-                  <button
-                    className={
-                      activeView === "library"
-                        ? "nav-row nav-row--active"
-                        : "nav-row"
-                    }
-                    onClick={() => setActiveView("library")}
-                  >
-                    <Library size={12} />
-                    <span>Component Library</span>
-                  </button>
-                  <button
-                    className={
-                      activeView === "settings"
-                        ? "nav-row nav-row--active"
-                        : "nav-row"
-                    }
-                    onClick={() => setActiveView("settings")}
-                  >
-                    <Sliders size={12} />
-                    <span>Preferences</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* Document list */}
-          <section
-            className={`sidebar-section sidebar-section--grow ${!documentsExpanded ? "collapsed" : ""}`}
-            style={{
-              paddingBottom: documentsExpanded ? 12 : 6,
-              borderBottom: "none",
-            }}
-          >
-            <div
-              className="section-title section-title-clickable"
-              onClick={() => {
-                const next = !documentsExpanded;
-                setDocumentsExpanded(next);
-                localStorage.setItem("hdv-acc-documents", String(next));
-              }}
-            >
-              <div className="section-title-left">
-                {documentsExpanded ? (
-                  <ChevronDown size={10} />
-                ) : (
-                  <ChevronRight size={10} />
-                )}
-                <span>Documents</span>
-              </div>
-              {documentsExpanded && <strong>{documents.length}</strong>}
-            </div>
-            <div
-              className={`sidebar-section-content ${documentsExpanded ? "expanded" : "collapsed"}`}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  minHeight: 0,
-                }}
-              >
-                <div
-                  className="search-input-wrapper input-clearable"
-                  style={{ marginTop: 8 }}
-                >
-                  <Search size={11} className="search-icon" />
-                  <input
-                    className="search-input"
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Search documents…"
-                  />
-                  {search && (
-                    <button
-                      type="button"
-                      className="input-clear-btn"
-                      onClick={() => setSearch("")}
-                      title="Clear search"
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
-                <div className="document-list">
-                  {filteredDocuments.map((document) => (
-                    <button
-                      type="button"
-                      key={document.id}
-                      className={
-                        activeDocument?.id === document.id
-                          ? "document-row document-row--active"
-                          : "document-row"
-                      }
-                      onClick={() => void openDocument(document.id)}
-                      onContextMenu={(e) =>
-                        handleDocumentContextMenu(e, document)
-                      }
-                    >
-                      <div className="doc-row-content">
-                        <FileText size={12} />
-                        <div className="doc-info">
-                          <span>{document.name}</span>
-                          <small>{document.relativePath}</small>
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                  {!filteredDocuments.length && (
-                    <div className="empty-state" style={{ marginTop: 8 }}>
-                      <strong>No documents found</strong>
-                      <span>No HTML files match filter.</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* Sidebar footer quick-actions (Item 26) */}
-          <div className="sidebar-footer">
-            <button
-              type="button"
-              className="sidebar-footer-btn"
-              title="New Document"
-              onClick={() => setIsNewDocModalOpen(true)}
-            >
-              <Plus size={12} />
-            </button>
-            <button
-              type="button"
-              className="sidebar-footer-btn"
-              title="Refresh Documents"
-              onClick={() => {
-                void refreshDocuments();
-                toast("Refreshed document list", "success");
-              }}
-            >
-              <RefreshCw size={11} />
-            </button>
-          </div>
-        </div>
-      </FloatingPanel>
-    );
-  };
-
-  const renderInspector = (isOnlyInColumn = true, isLastInColumn = false) => {
-    return (
-      <FloatingPanel
-        id="inspector"
-        title="Inspector"
-        layout={inspectorLayout}
-        onLayoutChange={(next) => handlePanelLayoutChange("inspector", next)}
-        allowedZones={["free", "dock-left", "dock-right"]}
-        workspaceRef={shellRef}
-        minWidth={240}
-        minHeight={120}
-        isOnlyInColumn={isOnlyInColumn}
-        isLastInColumn={isLastInColumn}
-      >
-        <InspectorPanel
-          activeTab={activeInspectorTab}
-          selectedItems={selectedItems}
-          settings={settings}
-          settingsDirty={settingsDirty}
-          pendingChangeCount={pendingCount}
-          templates={templates}
-          templateName={templateName}
-          inlineTemplateStyles={inlineTemplateStyles}
-          selectedTemplateId={selectedTemplateId}
-          templatePlacement={templatePlacement}
-          librarySearch={librarySearch}
-          renameTemplateName={renameTemplateName}
-          onTabChange={setActiveInspectorTab}
-          onSettingsChange={handleSettingsChange}
-          onTemplateNameChange={setTemplateName}
-          onInlineTemplateStylesChange={setInlineTemplateStyles}
-          onSelectedTemplateChange={handleTemplateSelection}
-          onTemplatePlacementChange={setTemplatePlacement}
-          onLibrarySearchChange={setLibrarySearch}
-          onRenameTemplateNameChange={setRenameTemplateName}
-          onElementEdit={handleElementEdit}
-          onSaveTemplate={() => void saveTemplate()}
-          onInsertTemplate={() => void insertTemplate()}
-          onRenameTemplate={() => void renameTemplate()}
-          onDeleteTemplate={() => void deleteTemplate()}
-          onTemplateContextMenu={handleTemplateContextMenu}
-        />
-      </FloatingPanel>
-    );
-  };
-
-  const renderInfoPanel = (isOnlyInColumn = true, isLastInColumn = false) => {
-    if (selectedItems.length === 0) return null;
-    return (
-      <FloatingInfoPanel
-        items={selectedItems}
-        copyNotice={fipCopyNotice}
-        workspaceRef={shellRef}
-        layout={infoPanelLayout}
-        onLayoutChange={(next) => handlePanelLayoutChange("info-panel", next)}
-        isOnlyInColumn={isOnlyInColumn}
-        isLastInColumn={isLastInColumn}
-        onCopyAll={() => {
-          void navigator.clipboard
-            .writeText(selectedItems.map((i) => i.agentReference).join("\n"))
-            .then(() => {
-              setFipCopyNotice("All references copied");
-              setTimeout(() => setFipCopyNotice(""), 1800);
-            });
-        }}
-        onCopyItem={(ref) => {
-          void navigator.clipboard.writeText(ref).then(() => {
-            setFipCopyNotice("Copied");
-            setTimeout(() => setFipCopyNotice(""), 1800);
-          });
-        }}
-      />
-    );
-  };
-
-  const renderDockZone = (zone: "dock-left" | "dock-right") => {
-    const panels: {
-      id: string;
-      layout: PanelLayout;
-      render: (isOnly: boolean, isLast?: boolean) => React.ReactNode;
-    }[] = [];
-
-    if (
-      sidebarLayout.isDocked &&
-      sidebarLayout.visible &&
-      sidebarLayout.zone === zone
-    ) {
-      panels.push({
-        id: "sidebar",
-        layout: sidebarLayout,
-        render: renderSidebar,
-      });
-    }
-    if (
-      inspectorLayout.isDocked &&
-      inspectorLayout.visible &&
-      inspectorLayout.zone === zone
-    ) {
-      panels.push({
-        id: "inspector",
-        layout: inspectorLayout,
-        render: renderInspector,
-      });
-    }
-    if (
-      infoPanelLayout.isDocked &&
-      infoPanelLayout.visible &&
-      selectedItems.length > 0 &&
-      infoPanelLayout.zone === zone
-    ) {
-      panels.push({
-        id: "info-panel",
-        layout: infoPanelLayout,
-        render: renderInfoPanel,
-      });
-    }
-
-    // Keep columns 0, 1, 2 permanently mounted to support smooth flexbox width transitions
-    const columns: Record<number, typeof panels> = {
-      0: [],
-      1: [],
-      2: [],
-    };
-    for (const p of panels) {
-      const col = p.layout.dockColumn ?? 0;
-      if (!columns[col]) columns[col] = [];
-      columns[col].push(p);
-    }
-
-    const colKeys = Object.keys(columns)
-      .map(Number)
-      .sort((a, b) => a - b);
-
-    // Calculate total size for smooth CSS transitions
-    let totalW = 0;
-    let totalH = 0;
-
-    if (zone === "dock-left" || zone === "dock-right") {
-      for (const colKey of colKeys) {
-        const colPanels = columns[colKey];
-        if (colPanels.length > 0) {
-          const w = colPanels[0]?.layout.w ?? 240;
-          totalW += w;
-        }
-      }
-    }
-
-    // Set inline styles depending on zone
-    const containerStyle: React.CSSProperties = {};
-    if (zone === "dock-left" || zone === "dock-right") {
-      containerStyle.width = `${totalW}px`;
-    }
-
-    const populatedCols = colKeys.filter(
-      (colKey) => columns[colKey].length > 0,
-    );
-    const isOnlyCol = populatedCols.length === 1;
-
-    return (
-      <div
-        className={`dock-zone-content dock-zone-content--${zone} ${panels.length === 0 ? "dock-zone-content--empty" : ""}`}
-        style={containerStyle}
-      >
-        {colKeys.map((colKey) => {
-          const colPanels = columns[colKey];
-
-          if (colPanels.length === 0) {
-            return (
-              <div
-                key={colKey}
-                className="dock-column dock-column--empty"
-                style={{
-                  width: 0,
-                  overflow: "hidden",
-                  flex: "0 0 auto",
-                  height: "100%",
-                  display: "flex",
-                  flexDirection: "column",
-                  transition: "width 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
-                }}
-                data-dock-column={colKey}
-              />
-            );
-          }
-
-          colPanels.sort(
-            (a, b) => (a.layout.dockRow ?? 0) - (b.layout.dockRow ?? 0),
-          );
-
-          const firstPanel = colPanels[0];
-          const w = firstPanel?.layout.w ?? 240;
-
-          const colStyle: React.CSSProperties = {
-              width: w,
-              flex: "0 0 auto",
-              height: "100%",
-              display: "flex",
-              flexDirection: "column",
-              transition: "width 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
-            };
-
-          return (
-            <div
-              key={colKey}
-              className="dock-column"
-              style={colStyle}
-              data-dock-column={colKey}
-            >
-              {colPanels.map((p) => {
-                const isOnly = colPanels.length === 1;
-                const h = p.layout.h;
-
-                const placeholderStyle: React.CSSProperties = {
-                  width: "100%",
-                  height: p.layout.minimized
-                    ? "32px"
-                    : isOnly
-                      ? "100%"
-                      : "auto",
-                  flex: p.layout.minimized
-                    ? "0 0 auto"
-                    : isOnly
-                      ? "1 1 auto"
-                      : `${h} ${h} 0%`,
-                  minHeight: p.layout.minimized ? "32px" : "100px",
-                };
-
-                return (
-                  <div
-                    key={p.id}
-                    id={`placeholder-${p.id}`}
-                    className={`dock-placeholder ${p.layout.minimized ? "dock-placeholder--minimized" : ""}`}
-                    style={placeholderStyle}
-                  />
-                );
-              })}
-            </div>
-          );
-        })}
-      </div>
-    );
+  const contextValue = {
+    canvasRef,
+    frameRef,
+    openDocIds,
+    activeDocument,
+    documents,
+    hasUnsavedChanges,
+    ancestors,
+    slideDeckMode,
+    discoveredSlides,
+    currentSlideIndex,
+    slideScale,
+    docScale,
+    activeInspectorTab,
+    selectedItems,
+    settings,
+    settingsDirty,
+    pendingCount,
+    pendingEdits,
+    templates,
+    templateName,
+    inlineTemplateStyles,
+    selectedTemplateId,
+    templatePlacement,
+    librarySearch,
+    renameTemplateName,
+    globalStyle,
+    pendingGlobalStyle,
+    fipCopyNotice,
+    destinationsExpanded,
+    documentsExpanded,
+    search,
+    filteredDocuments,
+    reloadToken,
+    selectorEnabled,
+    activeView,
+    busy,
+    setSlideScale,
+    setDiscoveredSlides,
+    setCurrentSlideIndex,
+    setDestinationsExpanded,
+    setDocumentsExpanded,
+    setSearch,
+    setActiveView,
+    setIsNewDocModalOpen,
+    setActiveInspectorTab,
+    setTemplateName,
+    setInlineTemplateStyles,
+    setTemplatePlacement,
+    setLibrarySearch,
+    setRenameTemplateName,
+    setFipCopyNotice,
+    openDocument,
+    closeDocumentTab,
+    handleTabContextMenu,
+    handleCanvasContextMenu,
+    handleSelectionChange,
+    handleFrameContextMenu,
+    handleElementEdit,
+    fitToWorkspaceRef,
+    handleSidebarContextMenu,
+    handleDocumentContextMenu,
+    refreshDocuments,
+    handleSettingsChange,
+    handleTemplateSelection,
+    saveTemplate,
+    insertTemplate,
+    renameTemplate,
+    deleteTemplate,
+    handleTemplateContextMenu,
+    handleGlobalStyleChange,
+    dockviewApi,
+    togglePanelVisible
   };
 
   return (
@@ -2811,7 +2087,9 @@ function App() {
               onClick={() => {
                 setSelectorEnabled(true);
                 setActiveInspectorTab("selection");
-                setInspectorLayout((prev) => ({ ...prev, visible: true }));
+                if (dockviewApi && !dockviewApi.getPanel("inspector")) {
+                  togglePanelVisible("inspector");
+                }
               }}
             >
               <MousePointer2 size={12} />
@@ -2828,6 +2106,8 @@ function App() {
               <Eye size={12} />
             </button>
           </div>
+
+
 
           <div className="toolbar-divider" />
 
@@ -2850,6 +2130,25 @@ function App() {
               title="Discard changes"
             >
               <RotateCcw size={11} />
+            </button>
+            <div className="toolbar-divider" style={{ height: "12px", margin: "0 2px", alignSelf: "center", background: "rgba(255,255,255,0.08)", width: "1px" }} />
+            <button
+              type="button"
+              className="segment-btn"
+              disabled={busy || !canUndo}
+              onClick={undo}
+              title="Undo (Ctrl+Z)"
+            >
+              <Undo size={11} />
+            </button>
+            <button
+              type="button"
+              className="segment-btn"
+              disabled={busy || !canRedo}
+              onClick={redo}
+              title="Redo (Ctrl+Y)"
+            >
+              <Redo size={11} />
             </button>
           </div>
 
@@ -2899,138 +2198,20 @@ function App() {
       </header>
 
       {/* ── WORKSPACE GRID ──────────────────────────────────── */}
-      <div
-        className={`workspace-grid ${!sidebarLayout.isDocked || !sidebarLayout.visible ? "grid--no-sidebar" : ""} ${!inspectorLayout.isDocked || !inspectorLayout.visible || activeView !== "editor" ? "grid--no-inspector" : ""}`}
-      >
-        {activeView === "editor" && (
-          <>
-            {/* Left Dock Container */}
-            <div className="dock-container dock-container--left">
-              {renderDockZone("dock-left")}
-            </div>
-
-            {/* ── CANVAS ─────────────────────────────────────────── */}
-            <section
-              className="canvas-column"
-              ref={canvasRef}
-              onContextMenu={handleCanvasContextMenu}
-            >
-              {/* Document Tab Bar (Item 24) */}
-              {openDocIds.length > 0 && (
-                <div className="document-tab-bar">
-                  <div className="document-tab-bar-scroll">
-                    {openDocIds.map((docId) => {
-                      const doc = documents.find((d) => d.id === docId);
-                      if (!doc) return null;
-                      const isActive = activeDocument?.id === docId;
-
-                      return (
-                        <div
-                          key={docId}
-                          className={`document-tab ${isActive ? "document-tab--active" : ""}`}
-                          onClick={() => void openDocument(docId)}
-                          onContextMenu={(e) => handleTabContextMenu(e, docId)}
-                        >
-                          <FileText size={11} className="document-tab__icon" />
-                          <span className="document-tab__name">{doc.name}</span>
-                          {hasUnsavedChanges && isActive && (
-                            <span className="document-tab__dirty-dot" />
-                          )}
-                          <button
-                            type="button"
-                            className="document-tab__close-btn"
-                            onClick={(e) => closeDocumentTab(docId, e)}
-                          >
-                            ×
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Breadcrumbs (Item 23) */}
-              <div className="canvas-breadcrumbs">
-                <span className="breadcrumb-file">
-                  {activeDocument?.relativePath || "No document selected"}
-                </span>
-                {ancestors.length > 0 && (
-                  <span className="breadcrumb-divider">&gt;</span>
-                )}
-                {ancestors.map((ancestor, index) => (
-                  <span
-                    key={`${ancestor.path}-${index}`}
-                    className="breadcrumb-item-wrapper"
-                  >
-                    <button
-                      type="button"
-                      className="breadcrumb-item"
-                      onClick={() => {
-                        if (frameRef.current) {
-                          frameRef.current.selectElementByPath(ancestor.path);
-                        }
-                      }}
-                    >
-                      {ancestor.tag}
-                    </button>
-                    {index < ancestors.length - 1 && (
-                      <span className="breadcrumb-divider">&gt;</span>
-                    )}
-                  </span>
-                ))}
-              </div>
-
-              {/* Canvas Content Wrapper (nested flex layout for bottom docking) */}
-              <div className="canvas-content-wrapper">
-                {/* Document frame — with mode-switch tint class (#51) */}
-                <DocumentFrame
-                  ref={frameRef}
-                  documentId={activeDocument?.id}
-                  documentPath={activeDocument?.relativePath}
-                  reloadToken={reloadToken}
-                  selectorEnabled={selectorEnabled}
-                  selectedItems={selectedItems}
-                  onSelectionChange={handleSelectionChange}
-                  onFrameContextMenu={handleFrameContextMenu}
-                  onElementEdit={handleElementEdit}
-                  shellClassName={
-                    selectorEnabled
-                      ? "document-frame-shell--select"
-                      : "document-frame-shell--preview"
-                  }
-                />
-
-              </div>
-            </section>
-
-            {/* Right Dock Container */}
-            <div className="dock-container dock-container--right">
-              {renderDockZone("dock-right")}
-            </div>
-
-            {/* Fixed overlay panels (automatically aligned to placeholders when docked) */}
-            {sidebarLayout.visible &&
-              renderSidebar(
-                getPanelStackFlags("sidebar").isOnlyInColumn,
-                getPanelStackFlags("sidebar").isLastInColumn,
-              )}
-            {inspectorLayout.visible &&
-              renderInspector(
-                getPanelStackFlags("inspector").isOnlyInColumn,
-                getPanelStackFlags("inspector").isLastInColumn,
-              )}
-            {infoPanelLayout.visible &&
-              selectedItems.length > 0 &&
-              renderInfoPanel(
-                getPanelStackFlags("info-panel").isOnlyInColumn,
-                getPanelStackFlags("info-panel").isLastInColumn,
-              )}
-          </>
+      <div className="workspace-grid grid--dockview">
+        {activeView === "editor" ? (
+          <AppContext.Provider value={contextValue}>
+            <DockviewReact
+              components={components}
+              onReady={onReady}
+              className="dockview-theme-dark hdv-dockview"
+            />
+          </AppContext.Provider>
+        ) : activeView === "library" ? (
+          renderLibraryScreen()
+        ) : (
+          renderSettingsScreen()
         )}
-
-        {activeView === "library" && renderLibraryScreen()}
-        {activeView === "settings" && renderSettingsScreen()}
       </div>
 
       {/* Frosted Status Bar Footer */}
@@ -3176,153 +2357,722 @@ function App() {
   );
 }
 
-function mergeEdits(
-  existing: ElementEdit | undefined,
-  incoming: ElementEdit,
-): ElementEdit {
-  return {
-    targetPath: incoming.targetPath,
-    styles: { ...(existing?.styles || {}), ...(incoming.styles || {}) },
-    attributes: {
-      ...(existing?.attributes || {}),
-      ...(incoming.attributes || {}),
-    },
-    textContent: incoming.textContent ?? existing?.textContent,
-  };
-}
+const DockviewCanvas = () => {
+  const ctx = useContext(AppContext);
+  if (!ctx) return null;
+  const {
+    canvasRef,
+    handleCanvasContextMenu,
+    openDocIds,
+    documents,
+    activeDocument,
+    openDocument,
+    handleTabContextMenu,
+    hasUnsavedChanges,
+    closeDocumentTab,
+    ancestors,
+    frameRef,
+    slideDeckMode,
+    handleSelectionChange,
+    discoveredSlides,
+    settings,
+    currentSlideIndex,
+    setCurrentSlideIndex,
+    slideScale,
+    setSlideScale,
+    fitToWorkspaceRef,
+    reloadToken,
+    selectorEnabled,
+    selectedItems,
+    handleFrameContextMenu,
+    handleElementEdit,
+    pendingEdits,
+    globalStyle,
+    pendingGlobalStyle,
+    docScale,
+    setDiscoveredSlides
+  } = ctx;
 
-const PADDING = 6;
-const TOPBAR_H = 36;
-const FOOTER_H = 16;
+  return (
+    <section
+      className="canvas-column"
+      ref={canvasRef}
+      onContextMenu={handleCanvasContextMenu}
+      style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}
+    >
+      {/* Document Tab Bar (Item 24) */}
+      {openDocIds.length > 0 && (
+        <div className="document-tab-bar">
+          <div className="document-tab-bar-scroll">
+            {openDocIds.map((docId: string) => {
+              const doc = documents.find((d: any) => d.id === docId);
+              if (!doc) return null;
+              const isActive = activeDocument?.id === docId;
 
-function pushFloatingPanel(
-  l: PanelLayout,
-  leftW: number,
-  rightW: number,
-): PanelLayout {
-  if (l.isDocked || !l.visible || l.maximized) return l;
+              return (
+                <div
+                  key={docId}
+                  className={`document-tab ${isActive ? "document-tab--active" : ""}`}
+                  onClick={() => void openDocument(docId)}
+                  onContextMenu={(e) => handleTabContextMenu(e, docId)}
+                >
+                  <FileText size={11} className="document-tab__icon" />
+                  <span className="document-tab__name">{doc.name}</span>
+                  {hasUnsavedChanges && isActive && (
+                    <span className="document-tab__dirty-dot" />
+                  )}
+                  <button
+                    type="button"
+                    className="document-tab__close-btn"
+                    onClick={(e) => closeDocumentTab(docId, e)}
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
-  const next = { ...l };
-  const leftBoundary = leftW + PADDING;
-  const rightBoundary = window.innerWidth - rightW - PADDING;
+      {/* Breadcrumbs (Item 23) */}
+      <div className="canvas-breadcrumbs">
+        <span className="breadcrumb-file">
+          {activeDocument?.relativePath || "No document selected"}
+        </span>
+        {ancestors.length > 0 && (
+          <span className="breadcrumb-divider">&gt;</span>
+        )}
+        {ancestors.map((ancestor: any, index: number) => {
+          const isCurrent = index === ancestors.length - 1;
+          return (
+            <span
+              key={`${ancestor.path}-${index}`}
+              className="breadcrumb-item-wrapper"
+            >
+              <button
+                type="button"
+                className={`breadcrumb-item ${isCurrent ? "breadcrumb-item--current" : ""}`}
+                disabled={isCurrent}
+                onClick={() => {
+                  if (frameRef.current) {
+                    frameRef.current.selectElementByPath(ancestor.path);
+                  }
+                }}
+              >
+                {formatBreadcrumb(ancestor.label)}
+              </button>
+              {index < ancestors.length - 1 && (
+                <span className="breadcrumb-divider">&gt;</span>
+              )}
+            </span>
+          );
+        })}
+      </div>
 
-  // Push right if overlapping left dock
-  if (next.x < leftBoundary) {
-    next.x = leftBoundary;
-  }
+      {/* Canvas Content Wrapper (nested flex layout for bottom docking) */}
+      {slideDeckMode ? (
+        <div
+          className="canvas-content-wrapper canvas-content-wrapper--slide-deck"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              handleSelectionChange([]);
+            }
+          }}
+        >
+          <div
+            className="slide-deck-main-layout"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                handleSelectionChange([]);
+              }
+            }}
+          >
+            <div className="slide-deck-thumbnail-strip">
+              {discoveredSlides.map((slide: any, idx: number) => {
+                const resolved = resolvePageSize(settings);
+                const wVal = cssLengthToPx(resolved.width);
+                const hVal = cssLengthToPx(resolved.height);
+                const aspectRatio = wVal > 0 && hVal > 0 ? `${wVal} / ${hVal}` : undefined;
+                return (
+                  <div
+                    key={slide.id}
+                    className={`slide-thumbnail-card ${currentSlideIndex === idx ? "slide-thumbnail-card--active" : ""}`}
+                    onClick={() => setCurrentSlideIndex(idx)}
+                    style={aspectRatio ? { aspectRatio } : undefined}
+                  >
+                    <span className="slide-thumbnail-number">{idx + 1}</span>
+                    <div className="slide-thumbnail-card-inner">
+                      <span className="slide-thumbnail-label">{slide.name}</span>
+                    </div>
+                  </div>
+                );
+              })}
+              {discoveredSlides.length === 0 && (
+                <div className="slide-thumbnail-empty">No slides detected</div>
+              )}
+            </div>
 
-  // Push left if overlapping right dock
-  if (next.x + next.w > rightBoundary) {
-    next.x = Math.max(leftBoundary, rightBoundary - next.w);
-  }
+            <div
+              className="slide-deck-frame-workspace"
+              onClick={(e) => {
+                if (e.target === e.currentTarget) {
+                  handleSelectionChange([]);
+                }
+              }}
+            >
+              <div
+                className="slide-deck-frame-scale-container"
+                style={(() => {
+                  const resolved = resolvePageSize(settings);
+                  return {
+                    width: resolved.width,
+                    height: resolved.height,
+                    transform: `scale(${slideScale})`,
+                    transformOrigin: "center center",
+                  };
+                })()}
+              >
+                <DocumentFrame
+                  ref={frameRef}
+                  documentId={activeDocument?.id}
+                  documentPath={activeDocument?.relativePath}
+                  reloadToken={reloadToken}
+                  selectorEnabled={selectorEnabled}
+                  selectedItems={selectedItems}
+                  onSelectionChange={handleSelectionChange}
+                  onFrameContextMenu={handleFrameContextMenu}
+                  onElementEdit={handleElementEdit}
+                  slideDeckMode={slideDeckMode}
+                  currentSlideIndex={currentSlideIndex}
+                  pendingEdits={pendingEdits}
+                  settings={settings}
+                  globalStyle={globalStyle}
+                  pendingGlobalStyle={pendingGlobalStyle}
+                  onSlidesDiscover={(slides) => {
+                    setDiscoveredSlides((prev: any) => {
+                      if (
+                        prev.length === slides.length &&
+                        prev.every((s: any, i: number) => s.id === slides[i].id && s.elementIndex === slides[i].elementIndex)
+                      ) {
+                        return prev;
+                      }
+                      return slides;
+                    });
+                  }}
+                  shellClassName={
+                    selectorEnabled
+                      ? "document-frame-shell--select"
+                      : "document-frame-shell--preview"
+                  }
+                />
+              </div>
+            </div>
+          </div>
 
-  return next;
-}
+          <div className="slide-deck-navigation-bar">
+            <div className="slide-deck-nav-left">
+              <button
+                type="button"
+                className="slide-deck-nav-btn"
+                disabled={currentSlideIndex <= 0}
+                onClick={() => setCurrentSlideIndex((prev: number) => Math.max(0, prev - 1))}
+                title="Previous slide"
+              >
+                <ChevronLeft size={14} />
+              </button>
+              <span className="slide-deck-nav-indicator">
+                Slide {discoveredSlides.length > 0 ? currentSlideIndex + 1 : 0} of {discoveredSlides.length}
+              </span>
+              <button
+                type="button"
+                className="slide-deck-nav-btn"
+                disabled={currentSlideIndex >= discoveredSlides.length - 1}
+                onClick={() => setCurrentSlideIndex((prev: number) => Math.min(discoveredSlides.length - 1, prev + 1))}
+                title="Next slide"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </div>
 
-function normalizeDockLayouts(
-  sidebar: PanelLayout,
-  inspector: PanelLayout,
-  info: PanelLayout,
-  isInfoActive: boolean,
-): { sidebar: PanelLayout; inspector: PanelLayout; info: PanelLayout } {
-  const next = {
-    sidebar: { ...sidebar },
-    inspector: { ...inspector },
-    info: { ...info },
-  };
+            <div className="slide-deck-nav-center">
+              {discoveredSlides.length > 0 && (
+                <select
+                  className="slide-deck-nav-select"
+                  value={currentSlideIndex}
+                  onChange={(e) => setCurrentSlideIndex(Number(e.target.value))}
+                >
+                  {discoveredSlides.map((slide: any, idx: number) => (
+                    <option key={slide.id} value={idx}>
+                      Slide {idx + 1}: {slide.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
 
-  const isVisible = (name: string, l: PanelLayout) => {
-    if (name === "info") return l.visible && isInfoActive;
-    return l.visible;
-  };
+            <div className="slide-deck-nav-right">
+              <div className="slide-deck-scale-controls">
+                <span className="slide-deck-scale-label">Zoom: {Math.round(slideScale * 100)}%</span>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="1.5"
+                  step="0.1"
+                  value={slideScale}
+                  onChange={(e) => setSlideScale(Number(e.target.value))}
+                  className="slide-deck-scale-slider"
+                />
+                <button
+                  type="button"
+                  className="slide-deck-nav-btn"
+                  onClick={() => fitToWorkspaceRef.current()}
+                  title="Fit to workspace"
+                  style={{ marginLeft: 6, fontSize: 10 }}
+                >
+                  Fit
+                </button>
+              </div>
 
-  const zones: ("dock-left" | "dock-right")[] = [
-    "dock-left",
-    "dock-right",
-  ];
+              <div className="slide-deck-nav-divider" />
 
-  for (const zone of zones) {
-    let docked = Object.entries(next).filter(
-      ([name, l]) => l.isDocked && l.zone === zone && isVisible(name, l),
-    );
+              <button
+                type="button"
+                className="slide-deck-nav-btn"
+                onClick={() => {
+                  const workspace = document.querySelector(".slide-deck-frame-workspace");
+                  if (workspace) {
+                    if (document.fullscreenElement) {
+                      void document.exitFullscreen();
+                    } else {
+                      void workspace.requestFullscreen();
+                    }
+                  }
+                }}
+                title="Present slideshow"
+              >
+                <Maximize2 size={14} />
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div
+          className="canvas-content-wrapper"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              handleSelectionChange([]);
+            }
+          }}
+        >
+          <DocumentFrame
+            ref={frameRef}
+            documentId={activeDocument?.id}
+            documentPath={activeDocument?.relativePath}
+            reloadToken={reloadToken}
+            selectorEnabled={selectorEnabled}
+            selectedItems={selectedItems}
+            onSelectionChange={handleSelectionChange}
+            onFrameContextMenu={handleFrameContextMenu}
+            onElementEdit={handleElementEdit}
+            slideDeckMode={slideDeckMode}
+            currentSlideIndex={currentSlideIndex}
+            pendingEdits={pendingEdits}
+            settings={settings}
+            globalStyle={globalStyle}
+            pendingGlobalStyle={pendingGlobalStyle}
+            docScale={docScale}
+            onSlidesDiscover={(slides) => {
+              setDiscoveredSlides((prev: any) => {
+                if (
+                  prev.length === slides.length &&
+                  prev.every((s: any, i: number) => s.id === slides[i].id && s.elementIndex === slides[i].elementIndex)
+                ) {
+                  return prev;
+                }
+                return slides;
+              });
+            }}
+            shellClassName={
+              selectorEnabled
+                ? "document-frame-shell--select"
+                : "document-frame-shell--preview"
+            }
+          />
+        </div>
+      )}
+    </section>
+  );
+};
 
-    if (docked.length === 0) continue;
+const DockviewSidebar = () => {
+  const ctx = useContext(AppContext);
+  if (!ctx) return null;
+  const {
+    handleSidebarContextMenu,
+    destinationsExpanded,
+    setDestinationsExpanded,
+    activeView,
+    setActiveView,
+    documentsExpanded,
+    setDocumentsExpanded,
+    documents,
+    search,
+    setSearch,
+    filteredDocuments,
+    openDocument,
+    handleDocumentContextMenu,
+    refreshDocuments,
+    setIsNewDocModalOpen,
+    activeDocument
+  } = ctx;
 
-    const columns: Record<number, typeof docked> = {};
-    for (const item of docked) {
-      const col = item[1].dockColumn ?? 0;
-      if (!columns[col]) columns[col] = [];
-      columns[col].push(item);
-    }
+  return (
+    <div
+      className="dockview-panel-container sidebar"
+      onContextMenu={handleSidebarContextMenu}
+    >
+      {/* macOS Sidebar Navigation Categories */}
+      <section
+        className={`sidebar-section sidebar-nav-section ${!destinationsExpanded ? "collapsed" : ""}`}
+        style={{ paddingBottom: destinationsExpanded ? 8 : 6 }}
+      >
+        <div
+          className="section-title section-title-clickable"
+          onClick={() => {
+            const next = !destinationsExpanded;
+            setDestinationsExpanded(next);
+            localStorage.setItem("hdv-acc-destinations", String(next));
+          }}
+        >
+          <div className="section-title-left">
+            {destinationsExpanded ? (
+              <ChevronDown size={10} />
+            ) : (
+              <ChevronRight size={10} />
+            )}
+            <span>Views</span>
+          </div>
+        </div>
+        <div
+          className={`sidebar-section-content ${destinationsExpanded ? "expanded" : "collapsed"}`}
+        >
+          <div>
+            <div
+              className="nav-list"
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 2,
+                marginTop: 6,
+              }}
+            >
+              <button
+                type="button"
+                className={`nav-row ${activeView === "editor" ? "nav-row--active" : ""}`}
+                onClick={() => setActiveView("editor")}
+              >
+                <FileText size={12} />
+                <span>Document Editor</span>
+              </button>
+              <button
+                type="button"
+                className={`nav-row ${activeView === "library" ? "nav-row--active" : ""}`}
+                onClick={() => setActiveView("library")}
+              >
+                <Library size={12} />
+                <span>Component Library</span>
+              </button>
+              <button
+                type="button"
+                className={`nav-row ${activeView === "settings" ? "nav-row--active" : ""}`}
+                onClick={() => setActiveView("settings")}
+              >
+                <Sliders size={12} />
+                <span>Preferences</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
 
-    const sortedColKeys = Object.keys(columns)
-      .map(Number)
-      .sort((a, b) => a - b);
+      {/* Document list */}
+      <section
+        className={`sidebar-section sidebar-section--grow ${!documentsExpanded ? "collapsed" : ""}`}
+        style={{
+          paddingBottom: documentsExpanded ? 12 : 6,
+          borderBottom: "none",
+        }}
+      >
+        <div
+          className="section-title section-title-clickable"
+          onClick={() => {
+            const next = !documentsExpanded;
+            setDocumentsExpanded(next);
+            localStorage.setItem("hdv-acc-documents", String(next));
+          }}
+        >
+          <div className="section-title-left">
+            {documentsExpanded ? (
+              <ChevronDown size={10} />
+            ) : (
+              <ChevronRight size={10} />
+            )}
+            <span>Documents</span>
+          </div>
+          {documentsExpanded && <strong>{documents.length}</strong>}
+        </div>
+        <div
+          className={`sidebar-section-content ${documentsExpanded ? "expanded" : "collapsed"}`}
+        >
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+            }}
+          >
+            <div
+              className="search-input-wrapper input-clearable"
+              style={{ marginTop: 8 }}
+            >
+              <Search size={11} className="search-icon" />
+              <input
+                className="search-input"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search documents…"
+              />
+              {search && (
+                <button
+                  type="button"
+                  className="input-clear-btn"
+                  onClick={() => setSearch("")}
+                  title="Clear search"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+            <div className="document-list">
+              {filteredDocuments.map((document: any) => (
+                <button
+                  type="button"
+                  key={document.id}
+                  className={
+                    activeDocument?.id === document.id
+                      ? "document-row document-row--active"
+                      : "document-row"
+                  }
+                  onClick={() => void openDocument(document.id)}
+                  onContextMenu={(e) =>
+                    handleDocumentContextMenu(e, document)
+                  }
+                >
+                  <div className="doc-row-content">
+                    <FileText size={12} />
+                    <div className="doc-info">
+                      <span>{document.name}</span>
+                      <small>{document.relativePath}</small>
+                    </div>
+                  </div>
+                </button>
+              ))}
+              {!filteredDocuments.length && (
+                <div className="empty-state" style={{ marginTop: 8 }}>
+                  <strong>No documents found</strong>
+                  <span>No HTML files match filter.</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
 
-    sortedColKeys.forEach((colKey, colIdx) => {
-      const colItems = columns[colKey];
-      colItems.sort((a, b) => (a[1].dockRow ?? 0) - (b[1].dockRow ?? 0));
-      colItems.forEach((item, rowIdx) => {
-        const pName = item[0] as "sidebar" | "inspector" | "info";
-        next[pName].dockColumn = colIdx;
-        next[pName].dockRow = rowIdx;
-      });
-    });
-  }
+      {/* Sidebar footer quick-actions (Item 26) */}
+      <div className="sidebar-footer">
+        <button
+          type="button"
+          className="sidebar-footer-btn"
+          title="New Document"
+          onClick={() => setIsNewDocModalOpen(true)}
+        >
+          <Plus size={12} />
+        </button>
+        <button
+          type="button"
+          className="sidebar-footer-btn"
+          title="Refresh Documents"
+          onClick={() => {
+            void refreshDocuments();
+            toast("Refreshed document list", "success");
+          }}
+        >
+          <RefreshCw size={11} />
+        </button>
+      </div>
+    </div>
+  );
+};
 
-  const getVisibleDocked = (
-    zone: "dock-left" | "dock-right",
-  ) => {
-    return [
-      { id: "sidebar", layout: next.sidebar },
-      { id: "inspector", layout: next.inspector },
-      { id: "info", layout: next.info },
-    ]
-      .filter(
-        (p) =>
-          p.layout.isDocked &&
-          p.layout.zone === zone &&
-          isVisible(p.id, p.layout),
-      )
-      .map((p) => p.layout);
-  };
+const DockviewInspector = () => {
+  const ctx = useContext(AppContext);
+  if (!ctx) return null;
+  const {
+    activeInspectorTab,
+    selectedItems,
+    settings,
+    settingsDirty,
+    pendingCount,
+    pendingEdits,
+    templates,
+    templateName,
+    inlineTemplateStyles,
+    selectedTemplateId,
+    templatePlacement,
+    librarySearch,
+    renameTemplateName,
+    setActiveInspectorTab,
+    handleSettingsChange,
+    setTemplateName,
+    setInlineTemplateStyles,
+    handleTemplateSelection,
+    setTemplatePlacement,
+    setLibrarySearch,
+    setRenameTemplateName,
+    handleElementEdit,
+    saveTemplate,
+    insertTemplate,
+    renameTemplate,
+    deleteTemplate,
+    handleTemplateContextMenu,
+    ancestors,
+    frameRef,
+    activeDocument,
+    globalStyle,
+    pendingGlobalStyle,
+    handleGlobalStyleChange
+  } = ctx;
 
-  // Calculate active dock zone dimensions to push floating windows
-  const leftPanels = getVisibleDocked("dock-left");
-  const rightPanels = getVisibleDocked("dock-right");
+  return (
+    <div className="dockview-panel-container inspector">
+      <InspectorPanel
+        activeTab={activeInspectorTab}
+        selectedItems={selectedItems}
+        settings={settings}
+        settingsDirty={settingsDirty}
+        pendingChangeCount={pendingCount}
+        pendingEdits={pendingEdits}
+        templates={templates}
+        templateName={templateName}
+        inlineTemplateStyles={inlineTemplateStyles}
+        selectedTemplateId={selectedTemplateId}
+        templatePlacement={templatePlacement}
+        librarySearch={librarySearch}
+        renameTemplateName={renameTemplateName}
+        onTabChange={setActiveInspectorTab}
+        onSettingsChange={handleSettingsChange}
+        onTemplateNameChange={setTemplateName}
+        onInlineTemplateStylesChange={setInlineTemplateStyles}
+        onSelectedTemplateChange={handleTemplateSelection}
+        onTemplatePlacementChange={setTemplatePlacement}
+        onLibrarySearchChange={setLibrarySearch}
+        onRenameTemplateNameChange={setRenameTemplateName}
+        onElementEdit={handleElementEdit}
+        onSaveTemplate={() => void saveTemplate()}
+        onInsertTemplate={() => void insertTemplate()}
+        onRenameTemplate={() => void renameTemplate()}
+        onDeleteTemplate={() => void deleteTemplate()}
+        onTemplateContextMenu={handleTemplateContextMenu}
+        ancestors={ancestors}
+        onSelectAncestor={(path) => {
+          if (frameRef.current) {
+            frameRef.current.selectElementByPath(path);
+          }
+        }}
+        documentId={activeDocument?.id}
+        globalStyle={globalStyle}
+        pendingGlobalStyle={pendingGlobalStyle}
+        onGlobalStyleChange={handleGlobalStyleChange}
+      />
+    </div>
+  );
+};
 
-  // Compute left dock width
-  const leftCols: Record<number, typeof leftPanels> = {};
-  for (const p of leftPanels) {
-    const col = p.dockColumn ?? 0;
-    if (!leftCols[col]) leftCols[col] = [];
-    leftCols[col].push(p);
-  }
-  let leftW = 0;
-  for (const colKey in leftCols) {
-    const colPanels = leftCols[colKey];
-    leftW += colPanels[0]?.w ?? 240;
-  }
+const DockviewInfoPanel = () => {
+  const ctx = useContext(AppContext);
+  if (!ctx) return null;
+  const {
+    selectedItems,
+    fipCopyNotice,
+    setFipCopyNotice
+  } = ctx;
 
-  // Compute right dock width
-  const rightCols: Record<number, typeof rightPanels> = {};
-  for (const p of rightPanels) {
-    const col = p.dockColumn ?? 0;
-    if (!rightCols[col]) rightCols[col] = [];
-    rightCols[col].push(p);
-  }
-  let rightW = 0;
-  for (const colKey in rightCols) {
-    const colPanels = rightCols[colKey];
-    rightW += colPanels[0]?.w ?? 240;
-  }
+  const title = selectedItems.length === 1 ? selectedItems[0].label : `${selectedItems.length} components`;
 
-  // Push any floating panels away from left/right docks
-  next.sidebar = pushFloatingPanel(next.sidebar, leftW, rightW);
-  next.inspector = pushFloatingPanel(next.inspector, leftW, rightW);
-  next.info = pushFloatingPanel(next.info, leftW, rightW);
+  return (
+    <div className="dockview-panel-container info-panel selection-popover">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 10px", borderBottom: "1px solid var(--border-soft)", background: "rgba(255,255,255,0.02)" }}>
+        <span style={{ fontSize: "10px", fontWeight: 600, color: "var(--text-3)" }}>{title}</span>
+        <button
+          type="button"
+          className="fip-action-btn"
+          onClick={() => {
+            void navigator.clipboard
+              .writeText(selectedItems.map((i: any) => i.agentReference).join("\n"))
+              .then(() => {
+                setFipCopyNotice("All references copied");
+                setTimeout(() => setFipCopyNotice(""), 1800);
+              });
+          }}
+          title="Copy all references"
+          style={{ background: "none", border: "none", color: "var(--text-3)", cursor: "pointer", display: "flex", alignItems: "center" }}
+        >
+          <Copy size={11} />
+        </button>
+      </div>
 
-  return next;
-}
+      <div className="fip-list" style={{ flex: 1, overflowY: "auto", padding: "6px" }}>
+        {selectedItems.map((item: any) => (
+          <button
+            key={item.path}
+            type="button"
+            className="fip-item"
+            onClick={() => {
+              void navigator.clipboard.writeText(item.agentReference).then(() => {
+                setFipCopyNotice("Copied");
+                setTimeout(() => setFipCopyNotice(""), 1800);
+              });
+            }}
+            title={item.agentReference}
+            style={{ width: "100%", textAlign: "left", marginBottom: "4px" }}
+          >
+            <div className="fip-item-top" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <span className="fip-item-tag">{item.tag}</span>
+              <strong className="fip-item-label">{item.label}</strong>
+            </div>
+            <code className="fip-item-ref" style={{ display: "block", fontSize: "9px", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {item.agentReference}
+            </code>
+          </button>
+        ))}
+      </div>
+
+      {fipCopyNotice && (
+        <div className="fip-copy-notice" style={{ padding: "6px 10px", background: "var(--accent-bright)", color: "#000", fontSize: "10px", display: "flex", alignItems: "center", gap: "6px", fontWeight: 500 }}>
+          <Copy size={10} />
+          <span>{fipCopyNotice}</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const components = {
+  canvas: DockviewCanvas,
+  sidebar: DockviewSidebar,
+  inspector: DockviewInspector,
+  infoPanel: DockviewInfoPanel,
+};
 
 export default App;

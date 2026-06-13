@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { chromium } from 'playwright'
 import { ensureWorkspace, isPathInside } from './paths'
-import { renderDocumentMarkup } from './html'
+import { renderDocumentMarkup, readDocumentSettings } from './html'
 
 export async function exportViewableHtml(rootPath: string, documentPath: string, documentId: string) {
   const folders = await ensureWorkspace(rootPath)
@@ -15,7 +15,9 @@ export async function exportViewableHtml(rootPath: string, documentPath: string,
   await copySiblingAssets(path.dirname(documentPath), assetsDir, documentPath)
 
   const source = await fs.readFile(documentPath, 'utf8')
-  const html = renderDocumentMarkup(source, documentId, { exportBaseHref: './assets/' })
+  const settings = readDocumentSettings(source)
+  const isSlideDeck = settings.pageSizePreset === 'Slide16_9'
+  const html = renderDocumentMarkup(source, documentId, { exportBaseHref: './assets/', isSlideDeck })
   const inlined = await inlinePagedScript(html)
   const indexPath = path.join(exportDir, 'index.html')
   await fs.writeFile(indexPath, inlined, 'utf8')

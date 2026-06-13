@@ -160,11 +160,14 @@ test('saves multiple selected elements as a grouped component in the library', a
   const frame = page.frameLocator('iframe[title="Document preview"]')
   // Click first element
   await frame.locator('[data-component="Headline"]').first().click()
+  await expect(frame.locator('[data-component="Headline"]').first()).toHaveClass(/hdv-selected/)
+
   // Shift+Click second element to multi-select
-  await frame.locator('[data-component="Summary"]').first().click({ modifiers: ['Shift'] })
+  await frame.locator('[data-component="Summary"]').first().click({ modifiers: ['Shift'], force: true })
+  await expect(frame.locator('[data-component="Summary"]').first()).toHaveClass(/hdv-selected/)
 
   // Right-click the second element to open element context menu
-  await frame.locator('[data-component="Summary"]').first().click({ button: 'right' })
+  await frame.locator('[data-component="Summary"]').first().click({ button: 'right', force: true })
 
   // Context menu should offer Grouped save option
   const groupedOption = page.getByText('Save as Component (Grouped)...')

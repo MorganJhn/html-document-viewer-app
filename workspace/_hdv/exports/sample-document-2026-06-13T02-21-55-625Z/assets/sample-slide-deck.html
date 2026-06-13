@@ -1,0 +1,377 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Aegis Infrastructure Platform - Pitch Deck</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  
+  <style data-hdv-document-settings>
+  /* hdv-settings:{"pageSizePreset":"Slide16_9","orientation":"landscape","width":"297mm","height":"167mm","marginTop":"0mm","marginRight":"0mm","marginBottom":"0mm","marginLeft":"0mm","backgroundColor":"#070a13"} */
+  @page {
+    size: 297mm 167mm;
+    margin: 0mm 0mm 0mm 0mm;
+  }
+  html,
+  body {
+    background: #070a13;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .pagedjs_page {
+    background: #070a13;
+  }
+  </style>
+
+  <style>
+    /* Reset & Typography */
+    body {
+      margin: 0;
+      font-family: 'Plus Jakarta Sans', Arial, sans-serif;
+      color: #cbd5e1;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    h1, h2, h3, .slide-title {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 700;
+      color: #ffffff;
+      margin: 0;
+      letter-spacing: -0.02em;
+    }
+
+    /* Core Slide Layout */
+    .page {
+      width: 297mm;
+      height: 167mm;
+      padding: 16mm 20mm;
+      box-sizing: border-box;
+      break-after: page;
+      position: relative;
+      background: radial-gradient(circle at 80% 20%, #111a2e 0%, #070a13 100%);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    /* Slide Header & Footer */
+    .slide-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      padding-bottom: 4mm;
+    }
+
+    .slide-header .brand {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 800;
+      font-size: 14px;
+      color: #3b82f6;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .slide-header .topic {
+      font-size: 11px;
+      font-weight: 600;
+      color: #64748b;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .slide-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      padding-top: 4mm;
+      font-size: 10px;
+      color: #475569;
+    }
+
+    .slide-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 6mm 0;
+    }
+
+    /* Cover Slide Styling */
+    .cover-layout {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: flex-start;
+      gap: 16px;
+    }
+
+    .cover-eyebrow {
+      font-size: 14px;
+      font-weight: 700;
+      color: #3b82f6;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+    }
+
+    .cover-title {
+      font-size: 48px;
+      line-height: 1.1;
+      max-width: 780px;
+      background: linear-gradient(135deg, #ffffff 30%, #93c5fd 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .cover-desc {
+      font-size: 16px;
+      color: #94a3b8;
+      max-width: 580px;
+      line-height: 1.5;
+    }
+
+    /* Grid Layouts */
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 32px;
+      align-items: center;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+    }
+
+    /* Cards */
+    .card {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 12px;
+      padding: 20px;
+      transition: border-color 0.2s ease;
+    }
+
+    .card:hover {
+      border-color: rgba(59, 130, 246, 0.3);
+    }
+
+    .card-title {
+      font-size: 18px;
+      color: #ffffff;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card-desc {
+      font-size: 13px;
+      line-height: 1.5;
+      color: #94a3b8;
+    }
+
+    /* List & Metrics */
+    .problem-list {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .problem-item {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .problem-icon {
+      flex-shrink: 0;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: rgba(239, 68, 68, 0.15);
+      color: #ef4444;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      font-size: 12px;
+    }
+
+    .metric-badge {
+      display: inline-block;
+      padding: 4px 10px;
+      background: rgba(16, 185, 129, 0.12);
+      border-radius: 6px;
+      color: #10b981;
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    .large-metric {
+      font-size: 54px;
+      font-weight: 800;
+      color: #ffffff;
+      line-height: 1;
+      margin-bottom: 8px;
+      font-family: 'Outfit', sans-serif;
+    }
+
+    .text-glow-blue {
+      text-shadow: 0 0 20px rgba(59, 130, 246, 0.4);
+    }
+
+    .text-glow-emerald {
+      text-shadow: 0 0 20px rgba(16, 185, 129, 0.4);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Slide 1: Cover Page -->
+  <main class="page" data-component="Cover slide" data-hdv-id="cover-slide">
+    <div class="cover-layout">
+      <div class="cover-eyebrow" data-name="Platform eyebrow">Enterprise Cloud Orchestration</div>
+      <h1 class="cover-title" data-component="Cover headline">Next-Gen Zero-Trust Multi-Cloud Platform</h1>
+      <p class="cover-desc" data-component="Cover description">Aegis provides unified container security, compliant cloud deployments, and continuous GitOps pipeline audits without operational overhead.</p>
+    </div>
+    <div class="slide-footer">
+      <span>AEGIS SYSTEMS INC.</span>
+      <span>CONFIDENTIAL - PITCH DECK</span>
+    </div>
+  </main>
+
+  <!-- Slide 2: The Problem -->
+  <section class="page" data-component="Problem slide" data-hdv-id="problem-slide">
+    <header class="slide-header">
+      <span class="brand">AEGIS INFRA</span>
+      <span class="topic">01. The Problem</span>
+    </header>
+    
+    <div class="slide-content">
+      <div class="grid-2">
+        <div class="problem-list" data-component="Problem factors list">
+          <h2 style="font-size: 26px; margin-bottom: 8px;">The Multi-Cloud Complexity Gap</h2>
+          <div class="problem-item" data-component="Problem item 1">
+            <span class="problem-icon">!</span>
+            <div>
+              <strong style="color: #ffffff;">Configuration Drift</strong>
+              <p style="margin: 4px 0 0 0; font-size: 13px; color: #94a3b8;">Manual overrides and divergent pipeline setups create security leaks across regions.</p>
+            </div>
+          </div>
+          <div class="problem-item" data-component="Problem item 2">
+            <span class="problem-icon">!</span>
+            <div>
+              <strong style="color: #ffffff;">Siloed Telemetry</strong>
+              <p style="margin: 4px 0 0 0; font-size: 13px; color: #94a3b8;">Operations teams spend average of 18 hours per outage correlating log outputs.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="text-align: center;" data-component="Problem callout card">
+          <div class="metric-badge" style="background: rgba(239, 68, 68, 0.12); color: #ef4444;">MARKET STATISTICS</div>
+          <div class="large-metric" style="color: #ef4444;">84%</div>
+          <p style="margin: 0; font-size: 14px; font-weight: 600; color: #ffffff;">of enterprises struggle with multi-cloud configuration visibility.</p>
+        </div>
+      </div>
+    </div>
+
+    <footer class="slide-footer">
+      <span>Aegis Pitch Deck 2026</span>
+      <span>Page 2 of 5</span>
+    </footer>
+  </section>
+
+  <!-- Slide 3: The Solution -->
+  <section class="page" data-component="Solution slide" data-hdv-id="solution-slide">
+    <header class="slide-header">
+      <span class="brand">AEGIS INFRA</span>
+      <span class="topic">02. The Solution</span>
+    </header>
+
+    <div class="slide-content">
+      <h2 style="font-size: 26px; margin-bottom: 20px; text-align: center;">Unified Autonomous Control Plane</h2>
+      <div class="grid-3" data-component="Solutions grid">
+        <article class="card" data-component="Solution feature card 1">
+          <h3 class="card-title"><span style="color: #3b82f6;">✦</span> Continuous GitOps</h3>
+          <p class="card-desc">Declarative state engines auto-reconcile settings directly from git, locking security profiles.</p>
+        </article>
+        <article class="card" data-component="Solution feature card 2">
+          <h3 class="card-title"><span style="color: #3b82f6;">✦</span> Universal Mesh</h3>
+          <p class="card-desc">Zero-trust network layer connecting multi-region K8s clusters automatically with Mutual TLS.</p>
+        </article>
+        <article class="card" data-component="Solution feature card 3">
+          <h3 class="card-title"><span style="color: #3b82f6;">✦</span> Automated Audit</h3>
+          <p class="card-desc">Compliance reporting generates real-time PDF audits for SOC2, ISO27001, and HIPAA.</p>
+        </article>
+      </div>
+    </div>
+
+    <footer class="slide-footer">
+      <span>Aegis Pitch Deck 2026</span>
+      <span>Page 3 of 5</span>
+    </footer>
+  </section>
+
+  <!-- Slide 4: Metrics -->
+  <section class="page" data-component="Metrics slide" data-hdv-id="metrics-slide">
+    <header class="slide-header">
+      <span class="brand">AEGIS INFRA</span>
+      <span class="topic">03. Performance Metrics</span>
+    </header>
+
+    <div class="slide-content">
+      <div class="grid-3" data-component="Metrics grid">
+        <div class="card" style="text-align: center;" data-component="Metric card 1">
+          <div class="metric-badge">AVAILABILITY</div>
+          <div class="large-metric text-glow-blue" style="color: #3b82f6;">99.999%</div>
+          <p style="margin: 0; font-size: 13px; color: #94a3b8;">High-availability multi-region uptime guarantee.</p>
+        </div>
+        <div class="card" style="text-align: center;" data-component="Metric card 2">
+          <div class="metric-badge">EFFICIENCY</div>
+          <div class="large-metric text-glow-emerald" style="color: #10b981;">35%</div>
+          <p style="margin: 0; font-size: 13px; color: #94a3b8;">Reduction in multi-cloud infrastructure run costs.</p>
+        </div>
+        <div class="card" style="text-align: center;" data-component="Metric card 3">
+          <div class="metric-badge">SPEED</div>
+          <div class="large-metric text-glow-blue" style="color: #3b82f6;">4.2x</div>
+          <p style="margin: 0; font-size: 13px; color: #94a3b8;">Increase in deployment cycles frequency.</p>
+        </div>
+      </div>
+    </div>
+
+    <footer class="slide-footer">
+      <span>Aegis Pitch Deck 2026</span>
+      <span>Page 4 of 5</span>
+    </footer>
+  </section>
+
+  <!-- Slide 5: CTA -->
+  <section class="page" data-component="CTA slide" data-hdv-id="closing-slide">
+    <header class="slide-header">
+      <span class="brand">AEGIS INFRA</span>
+      <span class="topic">04. Next Steps</span>
+    </header>
+
+    <div class="slide-content" style="text-align: center; gap: 16px;">
+      <h2 style="font-size: 36px;" data-component="CTA headline">Ready to Modernize Your Operations?</h2>
+      <p style="max-width: 580px; margin: 0 auto; line-height: 1.5; color: #94a3b8;" data-component="CTA description">Deploy Aegis Infrastructure Controller in under 5 minutes with our standard helm charts. Connect your AWS, GCP, and Azure accounts seamlessly.</p>
+      
+      <div style="margin-top: 10px;" data-component="CTA buttons group">
+        <span style="display: inline-block; padding: 10px 24px; background: #3b82f6; color: #ffffff; font-weight: 700; border-radius: 6px; font-size: 14px; margin-right: 12px; cursor: pointer;">Deploy on K8s Now</span>
+        <span style="display: inline-block; padding: 10px 24px; border: 1px solid rgba(255, 255, 255, 0.15); color: #ffffff; font-weight: 600; border-radius: 6px; font-size: 14px; cursor: pointer;">Book Demo Session</span>
+      </div>
+    </div>
+
+    <footer class="slide-footer">
+      <span>Aegis Pitch Deck 2026</span>
+      <span>Page 5 of 5</span>
+    </footer>
+  </section>
+
+</body>
+</html>

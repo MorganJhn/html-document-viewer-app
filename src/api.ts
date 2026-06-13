@@ -48,7 +48,7 @@ export const api = {
   createDocument: (payload: { name: string; settings: DocumentSettings }) =>
     apiPost<{ ok: true; document: DocumentDetail }>('/api/documents', payload),
   getDocument: (id: string) => apiGet<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
-  saveEdits: (id: string, payload: { elementEdits?: ElementEdit[]; documentSettings?: DocumentSettings }) =>
+  saveEdits: (id: string, payload: { elementEdits?: ElementEdit[]; documentSettings?: DocumentSettings; globalStyle?: string }) =>
     apiPost<{ ok: true; backupPath: string }>(`/api/documents/${encodeURIComponent(id)}/edits`, payload),
   exportHtml: (id: string) => apiPost<{ ok: true; path: string }>(`/api/documents/${encodeURIComponent(id)}/export/html`),
   exportPdf: (id: string) => apiPost<{ ok: true; path: string }>(`/api/documents/${encodeURIComponent(id)}/export/pdf`),

@@ -1,3 +1,6 @@
+import type { DocumentSettings } from '../shared/document-settings';
+export type { DocumentSettings };
+
 export interface WorkspaceInfo {
   workspacePath: string
   internalPath: string
@@ -11,20 +14,9 @@ export interface DocumentSummary {
   size: number
 }
 
-export interface DocumentSettings {
-  pageSizePreset: 'A4' | 'Letter' | 'Legal' | 'Custom'
-  orientation: 'portrait' | 'landscape'
-  width: string
-  height: string
-  marginTop: string
-  marginRight: string
-  marginBottom: string
-  marginLeft: string
-  backgroundColor: string
-}
-
 export interface DocumentDetail extends DocumentSummary {
   settings: DocumentSettings
+  globalStyle?: string
 }
 
 export interface ElementProperties {
@@ -48,6 +40,10 @@ export interface ElementProperties {
   border: string
   transform: string
   position: string
+  id: string
+  hdvId: string
+  class: string
+  src: string
 }
 
 export interface SelectionItem {
@@ -56,10 +52,12 @@ export interface SelectionItem {
   agentReference: string
   tag: string
   properties: ElementProperties
+  selector?: string
 }
 
 export interface ElementEdit {
   targetPath: string
+  selector?: string
   styles?: Record<string, string | null>
   attributes?: Record<string, string | null>
   textContent?: string

@@ -17,13 +17,14 @@ import {
   writeConfig,
 } from './paths'
 import {
-  DEFAULT_DOCUMENT_SETTINGS,
   applyDocumentEdits,
   insertTemplateHtml,
   readDocumentSettings,
+  readGlobalStyle,
   renderDocumentMarkup,
   upsertDocumentSettings,
 } from './html'
+import { DEFAULT_DOCUMENT_SETTINGS } from '../shared/document-settings'
 import { exportPdf, exportViewableHtml } from './exporter'
 import { deleteTemplate, getTemplate, listTemplates, saveTemplate, updateTemplate } from './templates'
 
@@ -127,8 +128,59 @@ export function createApp() {
       }
 
       const settings = req.body?.settings || DEFAULT_DOCUMENT_SETTINGS
+      const isSlideDeck = settings.width === '297mm' && settings.height === '167mm'
 
-      const initialHtml = `<!doctype html>
+      const initialHtml = isSlideDeck ? `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${path.basename(fileName, path.extname(fileName))}</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, sans-serif;
+      color: #172033;
+    }
+    .page {
+      width: 297mm;
+      height: 167mm;
+      box-sizing: border-box;
+      padding: 20mm;
+      break-after: page;
+      position: relative;
+      background: #ffffff;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+    }
+    h1 {
+      margin: 0 0 12px 0;
+      font-size: 44px;
+    }
+    h2 {
+      margin: 0 0 12px 0;
+      font-size: 32px;
+    }
+    p {
+      margin: 0;
+      font-size: 18px;
+      color: #46556b;
+    }
+  </style>
+</head>
+<body>
+  <main class="page" data-component="Cover slide" data-hdv-id="cover-slide">
+    <h1 data-component="Headline">Slide Deck Title</h1>
+    <p data-component="Subtitle">Sub-headline or presentation description.</p>
+  </main>
+  <section class="page" data-component="Content slide" data-hdv-id="content-slide">
+    <h2 data-component="Slide heading">Slide Title</h2>
+    <p data-component="Slide content">Add your slide content components here.</p>
+  </section>
+</body>
+</html>` : `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -174,6 +226,7 @@ export function createApp() {
         size: stat.size,
         modifiedAt: stat.mtime.toISOString(),
         settings: readDocumentSettings(html),
+        globalStyle: readGlobalStyle(html),
       })
     } catch (error) {
       next(error)
@@ -185,7 +238,9 @@ export function createApp() {
       const config = await getWorkspaceConfig()
       const documentPath = await resolveDocument(config.workspacePath, req.params.id)
       const html = await fs.readFile(documentPath, 'utf8')
-      res.type('html').send(renderDocumentMarkup(html, req.params.id))
+      const isSlideDeck = req.query.slideDeck === 'true'
+      const isPreview = req.query.preview === 'true'
+      res.type('html').send(renderDocumentMarkup(html, req.params.id, { isSlideDeck, previewMode: isPreview }))
     } catch (error) {
       next(error)
     }
@@ -204,6 +259,35 @@ export function createApp() {
       const contentType = mime.lookup(assetPath) || 'application/octet-stream'
       res.type(contentType)
       res.sendFile(assetPath)
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  app.post('/api/documents/:id/assets', requireWriteToken, async (req, res, next) => {
+    try {
+      const config = await getWorkspaceConfig()
+      const documentId = paramValue(req.params.id)
+      const documentPath = await resolveDocument(config.workspacePath, documentId)
+      const documentDir = path.dirname(documentPath)
+
+      const filename = String(req.body?.filename || '').trim()
+      const base64Data = String(req.body?.base64 || '')
+      if (!filename || !base64Data) {
+        res.status(400).json({ error: 'INVALID_PAYLOAD', message: 'Filename and base64 data are required.' })
+        return
+      }
+
+      const targetPath = path.resolve(documentDir, filename)
+      if (!isPathInside(documentDir, targetPath)) {
+        res.status(403).json({ error: 'PATH_OUTSIDE_DIR', message: 'Asset path must be inside the document directory.' })
+        return
+      }
+
+      const buffer = Buffer.from(base64Data, 'base64')
+      await fs.writeFile(targetPath, buffer)
+
+      res.json({ ok: true, filename })
     } catch (error) {
       next(error)
     }
@@ -244,7 +328,10 @@ export function createApp() {
       const config = await getWorkspaceConfig()
       const documentId = paramValue(req.params.id)
       const documentPath = await resolveDocument(config.workspacePath, documentId)
-      const renderUrl = `${req.protocol}://${req.get('host')}/api/documents/${encodeURIComponent(documentId)}/render`
+      const html = await fs.readFile(documentPath, 'utf8')
+      const settings = readDocumentSettings(html)
+      const isSlideDeck = settings.pageSizePreset === 'Slide16_9'
+      const renderUrl = `${req.protocol}://${req.get('host')}/api/documents/${encodeURIComponent(documentId)}/render${isSlideDeck ? '?slideDeck=true' : ''}`
       const outputPath = await exportPdf(config.workspacePath, documentPath, renderUrl)
       res.json({ ok: true, path: outputPath })
     } catch (error) {
@@ -404,6 +491,8 @@ body {
 
 .pagedjs_page {
   box-shadow: 0 16px 45px rgba(18, 26, 42, 0.18);
+  flex-shrink: 0;
+  flex-grow: 0;
 }
 
 [data-hdv-path] {

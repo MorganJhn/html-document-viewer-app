@@ -21,9 +21,8 @@ import {
   Field,
   IconButton,
   Tabs,
-  HorizontalScrollContainer,
-  Badge,
 } from "./ui";
+import { colorToHex, toast, formatBreadcrumb } from "../lib/utils";
 
 export type InspectorTab = "selection" | "document" | "library";
 
@@ -57,6 +56,13 @@ interface InspectorPanelProps {
     e: React.MouseEvent,
     template: TemplateRecord,
   ) => void;
+  ancestors?: Array<{ tag: string; path: string; label: string }>;
+  onSelectAncestor?: (path: string) => void;
+  pendingEdits?: Record<string, ElementEdit>;
+  documentId?: string;
+  globalStyle?: string;
+  pendingGlobalStyle?: string | null;
+  onGlobalStyleChange?: (css: string) => void;
 }
 
 export function InspectorPanel({
@@ -86,9 +92,56 @@ export function InspectorPanel({
   onRenameTemplate,
   onDeleteTemplate,
   onTemplateContextMenu,
+  ancestors,
+  onSelectAncestor,
+  pendingEdits,
+  documentId,
+  globalStyle = "",
+  pendingGlobalStyle = null,
+  onGlobalStyleChange,
 }: InspectorPanelProps) {
   const primary = selectedItems[0];
   const properties = primary?.properties;
+
+  const isFieldDirty = (
+    path: string,
+    type: "style" | "attribute" | "text",
+    name?: string
+  ): boolean => {
+    if (!pendingEdits || !path) return false;
+    const edit = pendingEdits[path];
+    if (!edit) return false;
+
+    if (type === "text") {
+      return typeof edit.textContent === "string";
+    }
+    if (type === "style" && name) {
+      return edit.styles ? Object.prototype.hasOwnProperty.call(edit.styles, name) : false;
+    }
+    if (type === "attribute" && name) {
+      return edit.attributes ? Object.prototype.hasOwnProperty.call(edit.attributes, name) : false;
+    }
+    return false;
+  };
+
+  const dirtyStyle = (isDirty: boolean): React.CSSProperties => {
+    return isDirty
+      ? {
+          borderColor: "var(--accent-bright)",
+          boxShadow: "0 0 0 1px var(--accent-glow)",
+        }
+      : {};
+  };
+
+  const formatStyleValue = (value: string): string => {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    if (/^\d+(\.\d+)?$/.test(trimmed)) {
+      return `${trimmed}px`;
+    }
+    return trimmed;
+  };
+
   const selectedTemplate = templates.find(
     (template) => template.id === selectedTemplateId,
   );
@@ -190,9 +243,54 @@ export function InspectorPanel({
                             : properties.label}
                         </span>
                         <small>
-                          {selectedItems.length > 1
-                            ? "Batch editing shared fields"
-                            : breadcrumbFor(primary)}
+                          {selectedItems.length > 1 ? (
+                            "Batch editing shared fields"
+                           ) : ancestors && ancestors.length > 0 ? (
+                            <span style={{ display: "flex", flexWrap: "wrap", gap: "3px", alignItems: "center" }}>
+                              {ancestors.map((ancestor, index) => {
+                                const isCurrent = index === ancestors.length - 1;
+                                return (
+                                  <span key={`${ancestor.path}-${index}`} style={{ display: "inline-flex", alignItems: "center", gap: "3px" }}>
+                                    <button
+                                      type="button"
+                                      disabled={isCurrent}
+                                      onClick={() => onSelectAncestor?.(ancestor.path)}
+                                      style={{
+                                        background: "none",
+                                        border: "none",
+                                        padding: "1px 3px",
+                                        fontSize: "9.5px",
+                                        color: isCurrent ? "var(--accent)" : "var(--text-3)",
+                                        fontWeight: isCurrent ? "600" : "400",
+                                        cursor: isCurrent ? "default" : "pointer",
+                                        borderRadius: "2px",
+                                        transition: "all 0.15s ease",
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        if (!isCurrent) {
+                                          e.currentTarget.style.color = "var(--text-1)";
+                                          e.currentTarget.style.background = "rgba(255, 255, 255, 0.08)";
+                                        }
+                                      }}
+                                      onMouseLeave={(e) => {
+                                        if (!isCurrent) {
+                                          e.currentTarget.style.color = "var(--text-3)";
+                                          e.currentTarget.style.background = "none";
+                                        }
+                                      }}
+                                    >
+                                      {formatBreadcrumb(ancestor.label)}
+                                    </button>
+                                    {index < ancestors.length - 1 && (
+                                      <span style={{ fontSize: "9px", color: "var(--text-4)" }}>&gt;</span>
+                                    )}
+                                  </span>
+                                );
+                              })}
+                            </span>
+                          ) : (
+                            breadcrumbFor(primary)
+                          )}
                         </small>
                       </div>
                       <IconButton
@@ -216,9 +314,72 @@ export function InspectorPanel({
                         onChange={(event) =>
                           onElementEdit({ textContent: event.target.value })
                         }
+                        style={dirtyStyle(isFieldDirty(primary.path, "text"))}
                       />
                     </Field>
                   </section>
+
+                  {/* Image Properties (Item 41) */}
+                  {properties.tag === "img" && (
+                    <section className="inspector-section" style={sectionStyle}>
+                      <div className="section-label">Image Properties</div>
+                      <Field label="Image Source (src)">
+                        <input
+                          value={properties.src}
+                          onChange={(event) =>
+                            onElementEdit({
+                              attributes: { src: event.target.value },
+                            })
+                          }
+                          style={dirtyStyle(isFieldDirty(primary.path, "attribute", "src"))}
+                        />
+                      </Field>
+                      <Field label="Upload Sibling Image">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={async (event) => {
+                            const file = event.target.files?.[0];
+                            if (!file || !documentId) return;
+
+                            const reader = new FileReader();
+                            reader.onload = async () => {
+                              const result = reader.result as string;
+                              const base64 = result.split(",")[1];
+                              try {
+                                const response = await fetch(`/api/documents/${encodeURIComponent(documentId)}/assets`, {
+                                  method: "POST",
+                                  headers: {
+                                    "content-type": "application/json",
+                                  },
+                                  body: JSON.stringify({ filename: file.name, base64 }),
+                                });
+                                const data = await response.json();
+                                if (response.ok && data.filename) {
+                                  onElementEdit({
+                                    attributes: { src: data.filename },
+                                  });
+                                  toast("Image uploaded successfully.", "success");
+                                } else {
+                                  toast(data.message || "Failed to upload image.", "error");
+                                }
+                              } catch {
+                                toast("Error uploading image.", "error");
+                              }
+                            };
+                            reader.readAsDataURL(file);
+                          }}
+                          style={{
+                            border: "none",
+                            background: "none",
+                            padding: 0,
+                            fontSize: "11px",
+                            cursor: "pointer",
+                          }}
+                        />
+                      </Field>
+                    </section>
+                  )}
 
                   <section className="inspector-section" style={sectionStyle}>
                     <div className="section-label">
@@ -234,27 +395,111 @@ export function InspectorPanel({
                               styles: { "font-size": event.target.value },
                             })
                           }
+                          onBlur={(event) => {
+                            const formatted = formatStyleValue(event.target.value);
+                            if (formatted !== event.target.value) {
+                              onElementEdit({
+                                styles: { "font-size": formatted },
+                              });
+                            }
+                          }}
+                          style={dirtyStyle(isFieldDirty(primary.path, "style", "font-size"))}
                         />
+                      </Field>
+                      <Field label="Font family" style={{ gridColumn: "1 / span 2" }}>
+                        <select
+                          value={getSelectableFontFamily(properties.fontFamily)}
+                          onChange={(event) =>
+                            onElementEdit({
+                              styles: { "font-family": event.target.value },
+                            })
+                          }
+                          style={dirtyStyle(isFieldDirty(primary.path, "style", "font-family"))}
+                        >
+                          <option value="">Default</option>
+                          <option value="system-ui, -apple-system, sans-serif">System Sans</option>
+                          <option value="Inter, sans-serif">Inter</option>
+                          <option value="JetBrains Mono, monospace">JetBrains Mono</option>
+                          <option value="Arial, sans-serif">Arial</option>
+                          <option value="Georgia, serif">Georgia</option>
+                          <option value="Courier New, monospace">Courier New</option>
+                          <option value="Times New Roman, serif">Times New Roman</option>
+                          {properties.fontFamily && !isStandardFont(properties.fontFamily) && (
+                            <option value={properties.fontFamily}>{properties.fontFamily}</option>
+                          )}
+                        </select>
                       </Field>
                       <Field label="Color">
-                        <input
-                          value={properties.color}
-                          onChange={(event) =>
-                            onElementEdit({
-                              styles: { color: event.target.value },
-                            })
-                          }
-                        />
+                        <div style={{ display: "flex", gap: "6px", width: "100%" }}>
+                          <input
+                            type="color"
+                            value={colorToHex(properties.color)}
+                            onChange={(event) =>
+                              onElementEdit({
+                                styles: { color: event.target.value },
+                              })
+                            }
+                            style={{
+                              width: "28px",
+                              height: "24px",
+                              padding: "0",
+                              border: "1px solid var(--border-soft)",
+                              borderRadius: "var(--r-xs)",
+                              cursor: "pointer",
+                              background: "none",
+                              flexShrink: 0
+                            }}
+                          />
+                          <input
+                            value={properties.color}
+                            onChange={(event) =>
+                              onElementEdit({
+                                styles: { color: event.target.value },
+                              })
+                            }
+                            style={{
+                              flex: 1,
+                              minWidth: 0,
+                              ...dirtyStyle(isFieldDirty(primary.path, "style", "color")),
+                            }}
+                          />
+                        </div>
                       </Field>
                       <Field label="Background">
-                        <input
-                          value={properties.backgroundColor}
-                          onChange={(event) =>
-                            onElementEdit({
-                              styles: { background: event.target.value },
-                            })
-                          }
-                        />
+                        <div style={{ display: "flex", gap: "6px", width: "100%" }}>
+                          <input
+                            type="color"
+                            value={colorToHex(properties.backgroundColor)}
+                            onChange={(event) =>
+                              onElementEdit({
+                                styles: { background: event.target.value },
+                              })
+                            }
+                            style={{
+                              width: "28px",
+                              height: "24px",
+                              padding: "0",
+                              border: "1px solid var(--border-soft)",
+                              borderRadius: "var(--r-xs)",
+                              cursor: "pointer",
+                              background: "none",
+                              flexShrink: 0
+                            }}
+                          />
+                          <input
+                            value={properties.backgroundColor}
+                            onChange={(event) =>
+                              onElementEdit({
+                                styles: { background: event.target.value },
+                              })
+                            }
+                            style={{
+                              flex: 1,
+                              minWidth: 0,
+                              ...dirtyStyle(isFieldDirty(primary.path, "style", "background")),
+                            }}
+                          />
+                        </div>
                       </Field>
                       <Field label="Opacity">
                         <input
@@ -264,6 +509,7 @@ export function InspectorPanel({
                               styles: { opacity: event.target.value },
                             })
                           }
+                          style={dirtyStyle(isFieldDirty(primary.path, "style", "opacity"))}
                         />
                       </Field>
                     </div>
@@ -305,6 +551,15 @@ export function InspectorPanel({
                               styles: { width: event.target.value },
                             })
                           }
+                          onBlur={(event) => {
+                            const formatted = formatStyleValue(event.target.value);
+                            if (formatted !== event.target.value) {
+                              onElementEdit({
+                                styles: { width: formatted },
+                              });
+                            }
+                          }}
+                          style={dirtyStyle(isFieldDirty(primary.path, "style", "width"))}
                         />
                       </Field>
                       <Field label="Height">
@@ -315,24 +570,180 @@ export function InspectorPanel({
                               styles: { height: event.target.value },
                             })
                           }
+                          onBlur={(event) => {
+                            const formatted = formatStyleValue(event.target.value);
+                            if (formatted !== event.target.value) {
+                              onElementEdit({
+                                styles: { height: formatted },
+                              });
+                            }
+                          }}
+                          style={dirtyStyle(isFieldDirty(primary.path, "style", "height"))}
                         />
                       </Field>
                     </div>
                   </section>
 
+                  {/* CSS Classes Editor (Item 36) */}
+                  <section className="inspector-section" style={sectionStyle}>
+                    <div className="section-label">CSS Classes</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px", width: "100%" }}>
+                      {(() => {
+                        const classList = properties.class ? properties.class.split(/\s+/).filter(Boolean) : [];
+                        const isClassDirty = isFieldDirty(primary.path, "attribute", "class");
+                        return (
+                          <>
+                            {classList.length > 0 ? (
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+                                {classList.map((cls) => (
+                                  <span
+                                    key={cls}
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "4px",
+                                      padding: "2px 6px",
+                                      background: "var(--bg-hover)",
+                                      border: "1px solid var(--border-soft)",
+                                      borderRadius: "99px",
+                                      fontSize: "10px",
+                                      color: "var(--text-2)",
+                                    }}
+                                  >
+                                    {cls}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const nextClasses = classList.filter((c) => c !== cls).join(" ");
+                                        onElementEdit({
+                                          attributes: { class: nextClasses || null },
+                                        });
+                                      }}
+                                      style={{
+                                        border: "none",
+                                        background: "none",
+                                        color: "var(--text-4)",
+                                        cursor: "pointer",
+                                        fontSize: "9px",
+                                        padding: "0 2px",
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        e.currentTarget.style.color = "var(--danger)";
+                                      }}
+                                      onMouseLeave={(e) => {
+                                        e.currentTarget.style.color = "var(--text-4)";
+                                      }}
+                                    >
+                                      ×
+                                    </button>
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <small style={{ color: "var(--text-4)", fontSize: "10.5px" }}>No classes applied</small>
+                            )}
+
+                            <div style={{ display: "flex", gap: "6px" }}>
+                              <input
+                                id="add-class-input"
+                                placeholder="Add class..."
+                                style={{
+                                  flex: 1,
+                                  minWidth: 0,
+                                  ...dirtyStyle(isClassDirty),
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    const val = event.currentTarget.value.trim();
+                                    if (val && !classList.includes(val)) {
+                                      const nextClasses = [...classList, val].join(" ");
+                                      onElementEdit({
+                                        attributes: { class: nextClasses },
+                                      });
+                                      event.currentTarget.value = "";
+                                    }
+                                  }
+                                }}
+                              />
+                              <Button
+                                variant="secondary"
+                                onClick={() => {
+                                  const input = document.getElementById("add-class-input") as HTMLInputElement | null;
+                                  const val = input?.value.trim();
+                                  if (val && !classList.includes(val)) {
+                                    const nextClasses = [...classList, val].join(" ");
+                                    onElementEdit({
+                                      attributes: { class: nextClasses },
+                                    });
+                                    if (input) input.value = "";
+                                  }
+                                }}
+                                style={{ minHeight: "24px", height: "24px" }}
+                              >
+                                Add
+                              </Button>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </section>
+
+                  {/* Identity Section (Item 45) */}
                   <section className="inspector-section" style={sectionStyle}>
                     <div className="section-label">Identity</div>
+                    
                     <Field label="Component name">
                       <input
-                        defaultValue={primary.label}
-                        onBlur={(event) =>
+                        value={properties.label}
+                        onChange={(event) =>
                           onElementEdit({
                             attributes: {
                               "data-component": event.target.value,
                             },
                           })
                         }
+                        style={dirtyStyle(isFieldDirty(primary.path, "attribute", "data-component"))}
                       />
+                    </Field>
+
+                    <Field label="Stable ID (data-hdv-id)">
+                      <div style={{ display: "flex", gap: "6px", width: "100%" }}>
+                        <input
+                          value={properties.hdvId}
+                          placeholder="No stable ID set"
+                          style={{
+                            flex: 1,
+                            minWidth: 0,
+                            ...dirtyStyle(isFieldDirty(primary.path, "attribute", "data-hdv-id")),
+                          }}
+                          onChange={(event) =>
+                            onElementEdit({
+                              attributes: { "data-hdv-id": event.target.value || null },
+                            })
+                          }
+                        />
+                        {!properties.hdvId && (
+                          <Button
+                            variant="secondary"
+                            style={{ padding: "0 8px", flexShrink: 0, minHeight: "24px", height: "24px" }}
+                            onClick={() => {
+                              const generatedId = `${properties.tag}-${properties.label
+                                .toLowerCase()
+                                .replace(/[^a-z0-9]+/g, "-")
+                                .replace(/^-+|-+$/g, "")}`;
+                              onElementEdit({
+                                attributes: { "data-hdv-id": generatedId },
+                              });
+                            }}
+                          >
+                            Generate ID
+                          </Button>
+                        )}
+                      </div>
                     </Field>
                   </section>
                 </>
@@ -356,6 +767,33 @@ export function InspectorPanel({
                     onChange={onSettingsChange}
                     layout="stacked"
                   />
+                </section>
+                <section className="inspector-section" style={sectionStyle}>
+                  <div className="section-label">
+                    <Sliders size={13} />
+                    <span>Global Styles</span>
+                  </div>
+                  <Field label="Custom Document CSS (Non-inline)">
+                    <textarea
+                      value={pendingGlobalStyle !== null ? pendingGlobalStyle : globalStyle}
+                      rows={12}
+                      onChange={(event) => {
+                        onGlobalStyleChange?.(event.target.value);
+                      }}
+                      style={{
+                        fontFamily: '"JetBrains Mono", "SF Mono", monospace',
+                        fontSize: '11px',
+                        lineHeight: '1.4',
+                        background: 'var(--bg-input)',
+                        color: 'var(--text-1)',
+                        border: pendingGlobalStyle !== null ? '1px solid var(--accent)' : '1px solid var(--border)',
+                        borderRadius: '4px',
+                        padding: '8px',
+                        width: '100%',
+                        resize: 'vertical',
+                      }}
+                    />
+                  </Field>
                 </section>
                 <section className="inspector-section" style={sectionStyle}>
                   <div className="section-label">Current values</div>
@@ -582,36 +1020,50 @@ function Property({ label, value }: { label: string; value: string }) {
 }
 
 function breadcrumbFor(item: SelectionItem) {
-  return `${item.tag} › ${item.path}`;
+  const label = item.properties?.label || item.tag;
+  const quoteIdx = label.indexOf(' "');
+  const formatted = quoteIdx !== -1 ? label.substring(0, quoteIdx) : label;
+  return `${formatted} › ${item.path}`;
 }
 
-function BottomProperty({ label, value }: { label: string; value: string }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        fontSize: "10px",
-        gap: "8px",
-        borderBottom: "1px solid rgba(255,255,255,0.03)",
-        padding: "2px 0",
-      }}
-    >
-      <span style={{ color: "var(--text-3)", whiteSpace: "nowrap" }}>
-        {label}
-      </span>
-      <strong
-        style={{
-          color: "var(--text-1)",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          textAlign: "right",
-        }}
-      >
-        {value}
-      </strong>
-    </div>
+
+
+
+function isStandardFont(font: string) {
+  if (!font) return true;
+  const normalized = font.replace(/['"]/g, "").toLowerCase();
+  const standards = [
+    "system-ui, -apple-system, sans-serif",
+    "inter, sans-serif",
+    "jetbrains mono, monospace",
+    "arial, sans-serif",
+    "georgia, serif",
+    "courier new, monospace",
+    "times new roman, serif",
+  ];
+  return standards.some(
+    (std) =>
+      normalized.includes(std.replace(/['"]/g, "").toLowerCase()) ||
+      std.split(",")[0].trim() === normalized.split(",")[0].trim()
   );
+}
+
+function getSelectableFontFamily(font: string) {
+  if (!font) return "";
+  const normalized = font.replace(/['"]/g, "").toLowerCase();
+  const mapping: Record<string, string> = {
+    "system-ui": "system-ui, -apple-system, sans-serif",
+    "inter": "Inter, sans-serif",
+    "jetbrains mono": "JetBrains Mono, monospace",
+    "arial": "Arial, sans-serif",
+    "georgia": "Georgia, serif",
+    "courier new": "Courier New, monospace",
+    "times new roman": "Times New Roman, serif",
+  };
+  for (const [key, val] of Object.entries(mapping)) {
+    if (normalized.includes(key)) {
+      return val;
+    }
+  }
+  return font;
 }

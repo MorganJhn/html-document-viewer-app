@@ -9,7 +9,25 @@ interface DocumentControlsProps {
 
 export function DocumentControls({ settings, onChange, layout = 'compact' }: DocumentControlsProps) {
   function update<K extends keyof DocumentSettings>(key: K, value: DocumentSettings[K]) {
-    onChange({ ...settings, [key]: value })
+    const nextSettings = { ...settings, [key]: value }
+    if (key === 'pageSizePreset' || key === 'orientation') {
+      const preset = nextSettings.pageSizePreset
+      const orient = nextSettings.orientation
+      if (preset === 'A4') {
+        nextSettings.width = orient === 'landscape' ? '297mm' : '210mm'
+        nextSettings.height = orient === 'landscape' ? '210mm' : '297mm'
+      } else if (preset === 'Letter') {
+        nextSettings.width = orient === 'landscape' ? '11in' : '8.5in'
+        nextSettings.height = orient === 'landscape' ? '8.5in' : '11in'
+      } else if (preset === 'Legal') {
+        nextSettings.width = orient === 'landscape' ? '14in' : '8.5in'
+        nextSettings.height = orient === 'landscape' ? '8.5in' : '14in'
+      } else if (preset === 'Slide16_9') {
+        nextSettings.width = '297mm'
+        nextSettings.height = '167mm'
+      }
+    }
+    onChange(nextSettings)
   }
 
   if (layout === 'stacked') {
@@ -24,6 +42,7 @@ export function DocumentControls({ settings, onChange, layout = 'compact' }: Doc
             <option value="A4">A4</option>
             <option value="Letter">Letter</option>
             <option value="Legal">Legal</option>
+            <option value="Slide16_9">Slide 16:9</option>
             <option value="Custom">Custom</option>
           </select>
         </label>
@@ -91,6 +110,7 @@ export function DocumentControls({ settings, onChange, layout = 'compact' }: Doc
           <option value="A4">A4</option>
           <option value="Letter">Letter</option>
           <option value="Legal">Legal</option>
+          <option value="Slide16_9">Slide 16:9</option>
           <option value="Custom">Custom</option>
         </select>
       </label>

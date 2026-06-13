@@ -3,6 +3,7 @@ import path from 'node:path'
 import { nanoid } from 'nanoid'
 import { parseFragment, type DefaultTreeAdapterMap } from 'parse5'
 import { ensureWorkspace } from './paths'
+import { escapeAttribute } from '../shared/escape'
 
 export interface TemplateRecord {
   id: string
@@ -106,14 +107,6 @@ function annotateTemplateRoot(html: string, name: string) {
     }
     return `<${tagName} data-component="${escapedName}"${attrs}>`
   })
-}
-
-function escapeAttribute(value: string) {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('"', '&quot;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
 }
 
 function collectText(node: DefaultTreeAdapterMap['node']): string {

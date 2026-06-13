@@ -1,4 +1,6 @@
 import { parse, serialize, type DefaultTreeAdapterMap } from 'parse5'
+import { DEFAULT_DOCUMENT_SETTINGS, type DocumentSettings } from '../shared/document-settings'
+import { escapeAttribute, escapeText } from '../shared/escape'
 
 type AnyNode = DefaultTreeAdapterMap['node']
 type ElementNode = DefaultTreeAdapterMap['element']
@@ -20,20 +22,9 @@ type LocationNode = ElementNode & {
   }
 }
 
-export interface DocumentSettings {
-  pageSizePreset: 'A4' | 'Letter' | 'Legal' | 'Custom'
-  orientation: 'portrait' | 'landscape'
-  width: string
-  height: string
-  marginTop: string
-  marginRight: string
-  marginBottom: string
-  marginLeft: string
-  backgroundColor: string
-}
-
 export interface ElementEdit {
   targetPath: string
+  selector?: string
   styles?: Record<string, string | null>
   attributes?: Record<string, string | null>
   textContent?: string
@@ -42,24 +33,13 @@ export interface ElementEdit {
 export interface ApplyEditsInput {
   elementEdits?: ElementEdit[]
   documentSettings?: DocumentSettings
+  globalStyle?: string
 }
 
 export interface InsertTemplateInput {
   targetPath: string
   placement: 'before' | 'after' | 'inside-start' | 'inside-end'
   html: string
-}
-
-export const DEFAULT_DOCUMENT_SETTINGS: DocumentSettings = {
-  pageSizePreset: 'A4',
-  orientation: 'portrait',
-  width: '210mm',
-  height: '297mm',
-  marginTop: '20mm',
-  marginRight: '20mm',
-  marginBottom: '20mm',
-  marginLeft: '20mm',
-  backgroundColor: '#ffffff',
 }
 
 const SETTINGS_SELECTOR = /<style\b(?=[^>]*\bdata-hdv-document-settings\b)[^>]*>[\s\S]*?<\/style>/i
@@ -85,10 +65,7 @@ export function readDocumentSettings(html: string): DocumentSettings {
 
 export function buildDocumentSettingsStyle(settings: DocumentSettings, attribute = 'data-hdv-document-settings') {
   const normalized = normalizeSettings(settings)
-  const pageSize =
-    normalized.pageSizePreset === 'Custom'
-      ? `${normalized.width} ${normalized.height}`
-      : `${normalized.pageSizePreset} ${normalized.orientation}`
+  const pageSize = `${normalized.width} ${normalized.height}`
   const margins = `${normalized.marginTop} ${normalized.marginRight} ${normalized.marginBottom} ${normalized.marginLeft}`
 
   return `<style ${attribute}>
@@ -118,18 +95,24 @@ export function upsertDocumentSettings(html: string, settings: DocumentSettings)
   return injectIntoHead(html, style)
 }
 
-export function renderDocumentMarkup(html: string, documentId: string, options: { exportBaseHref?: string } = {}) {
+export function renderDocumentMarkup(html: string, documentId: string, options: { exportBaseHref?: string; isSlideDeck?: boolean; previewMode?: boolean } = {}) {
   const settings = readDocumentSettings(html)
   const marked = addRuntimeAttributes(html)
   const baseHref = options.exportBaseHref ?? `/api/documents/${encodeURIComponent(documentId)}/assets/`
+  
   const head = [
     `<base data-hdv-base href="${escapeAttribute(baseHref)}">`,
     buildDocumentSettingsStyle(settings, 'data-hdv-preview-settings'),
     `<link rel="stylesheet" href="/viewer/render.css">`,
-    `<script src="/vendor/paged.polyfill.js"></script>`,
-  ].join('\n')
+  ]
+  if (!options.isSlideDeck) {
+    if (options.previewMode) {
+      head.push(`<script>window.PagedConfig = { auto: false };</script>`)
+    }
+    head.push(`<script src="/vendor/paged.polyfill.js"></script>`)
+  }
 
-  return injectIntoHead(marked, head)
+  return injectIntoHead(marked, head.join('\n'))
 }
 
 export function applyDocumentEdits(html: string, input: ApplyEditsInput) {
@@ -139,7 +122,10 @@ export function applyDocumentEdits(html: string, input: ApplyEditsInput) {
   if (input.elementEdits?.length) {
     const document = parse(html, { sourceCodeLocationInfo: true }) as DocumentNode
     for (const edit of input.elementEdits) {
-      const element = findElementByPath(document, edit.targetPath)
+      let element = edit.selector ? findElementBySelector(document, edit.selector) : undefined
+      if (!element) {
+        element = findElementByPath(document, edit.targetPath)
+      }
       if (!element) {
         throw Object.assign(new Error(`Element not found for path ${edit.targetPath}.`), { statusCode: 400 })
       }
@@ -166,6 +152,10 @@ export function applyDocumentEdits(html: string, input: ApplyEditsInput) {
 
   if (input.documentSettings) {
     nextHtml = upsertDocumentSettings(nextHtml, input.documentSettings)
+  }
+
+  if (typeof input.globalStyle === 'string') {
+    nextHtml = upsertGlobalStyle(nextHtml, input.globalStyle)
   }
 
   return nextHtml
@@ -270,6 +260,25 @@ function getElementPath(parent: AnyNode, child: ElementNode) {
   return parentPath ? `${parentPath}.${index}` : `${index}`
 }
 
+function findElementBySelector(node: AnyNode, selector: string): ElementNode | undefined {
+  const eqIdx = selector.indexOf('=')
+  if (eqIdx !== -1) {
+    const attrName = selector.substring(0, eqIdx).trim()
+    const attrVal = selector.substring(eqIdx + 1).trim()
+    if (isElement(node) && getAttribute(node, attrName) === attrVal) {
+      return node
+    }
+  }
+
+  for (const child of getChildNodes(node)) {
+    const found = findElementBySelector(child, selector)
+    if (found) {
+      return found
+    }
+  }
+  return undefined
+}
+
 function findElementByPath(document: DocumentNode, sourcePath: string) {
   const parts = sourcePath
     .split('.')
@@ -367,7 +376,7 @@ function queueTextPatch(patches: Array<{ start: number; end: number; value: stri
   patches.push({
     start: location.startTag.endOffset,
     end: location.endTag.startOffset,
-    value: escapeHtml(text),
+    value: escapeText(text),
   })
 }
 
@@ -420,24 +429,105 @@ function injectIntoHead(html: string, markup: string) {
 }
 
 function normalizeSettings(settings: Partial<DocumentSettings>): DocumentSettings {
+  const preset = ['A4', 'Letter', 'Legal', 'Slide16_9', 'Custom'].includes(settings.pageSizePreset || '')
+    ? (settings.pageSizePreset as DocumentSettings['pageSizePreset'])
+    : DEFAULT_DOCUMENT_SETTINGS.pageSizePreset
+  const orientation = settings.orientation === 'landscape' ? 'landscape' : 'portrait'
+
+  let width = settings.width || DEFAULT_DOCUMENT_SETTINGS.width
+  let height = settings.height || DEFAULT_DOCUMENT_SETTINGS.height
+
+  if (preset === 'A4') {
+    width = orientation === 'landscape' ? '297mm' : '210mm'
+    height = orientation === 'landscape' ? '210mm' : '297mm'
+  } else if (preset === 'Letter') {
+    width = orientation === 'landscape' ? '11in' : '8.5in'
+    height = orientation === 'landscape' ? '8.5in' : '11in'
+  } else if (preset === 'Legal') {
+    width = orientation === 'landscape' ? '14in' : '8.5in'
+    height = orientation === 'landscape' ? '8.5in' : '14in'
+  } else if (preset === 'Slide16_9') {
+    width = '297mm'
+    height = '167mm'
+  }
+
   return {
     ...DEFAULT_DOCUMENT_SETTINGS,
     ...settings,
-    pageSizePreset: ['A4', 'Letter', 'Legal', 'Custom'].includes(settings.pageSizePreset || '')
-      ? (settings.pageSizePreset as DocumentSettings['pageSizePreset'])
-      : DEFAULT_DOCUMENT_SETTINGS.pageSizePreset,
-    orientation: settings.orientation === 'landscape' ? 'landscape' : 'portrait',
+    pageSizePreset: preset,
+    orientation,
+    width,
+    height,
   }
 }
 
-function escapeAttribute(value: string) {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('"', '&quot;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
+function findMainStyleElement(node: AnyNode): ElementNode | undefined {
+  if (isElement(node) && node.tagName === 'style' && getAttribute(node, 'data-hdv-document-settings') === undefined) {
+    return node
+  }
+  for (const child of getChildNodes(node)) {
+    const found = findMainStyleElement(child)
+    if (found) {
+      return found
+    }
+  }
+  return undefined
 }
 
-function escapeHtml(value: string) {
-  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+function findElementByName(node: AnyNode, name: string): ElementNode | undefined {
+  if (isElement(node) && node.tagName === name) {
+    return node
+  }
+  for (const child of getChildNodes(node)) {
+    const found = findElementByName(child, name)
+    if (found) {
+      return found
+    }
+  }
+  return undefined
+}
+
+function getElementTextContent(element: ElementNode): string {
+  const textNode = element.childNodes.find((child) => child.nodeName === '#text') as { value: string } | undefined
+  return textNode ? textNode.value : ''
+}
+
+export function readGlobalStyle(html: string): string {
+  try {
+    const doc = parse(html) as DocumentNode
+    const styleEl = findMainStyleElement(doc)
+    if (styleEl) {
+      return getElementTextContent(styleEl)
+    }
+  } catch (err) {
+    console.error('Error reading global style', err)
+  }
+  return ''
+}
+
+export function upsertGlobalStyle(html: string, globalStyle: string): string {
+  const doc = parse(html, { sourceCodeLocationInfo: true }) as DocumentNode
+  const styleEl = findMainStyleElement(doc) as LocationNode
+  
+  if (styleEl && styleEl.sourceCodeLocation) {
+    const startTag = styleEl.sourceCodeLocation.startTag
+    const endTag = styleEl.sourceCodeLocation.endTag
+    if (startTag && endTag) {
+      const start = startTag.endOffset
+      const end = endTag.startOffset
+      return html.substring(0, start) + '\n' + globalStyle + '\n' + html.substring(end)
+    }
+  }
+  
+  const headEl = findElementByName(doc, 'head') as LocationNode
+  if (headEl && headEl.sourceCodeLocation) {
+    const startTag = headEl.sourceCodeLocation.startTag
+    if (startTag) {
+      const injectOffset = startTag.endOffset
+      const styleBlock = `\n  <style>\n${globalStyle}\n  </style>`
+      return html.substring(0, injectOffset) + styleBlock + html.substring(injectOffset)
+    }
+  }
+  
+  return html.replace('<head>', `<head>\n  <style>\n${globalStyle}\n  </style>`)
 }

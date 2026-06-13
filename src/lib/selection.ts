@@ -24,12 +24,14 @@ export function collectSelectionItem(element: Element, frameWindow: Window, docu
   const path = element.getAttribute('data-hdv-path') || ''
   const label = getElementLabel(element)
   const documentPath = documentPathOverride || frameWindow.frameElement?.getAttribute('data-document-path') || ''
+  const selector = element.getAttribute('data-hdv-source-selector') || undefined
   return {
     path,
     label,
     agentReference: buildAgentReference(element, documentPath),
     tag: element.tagName.toLowerCase(),
     properties: readElementProperties(element, frameWindow, label, path),
+    selector,
   }
 }
 
@@ -76,6 +78,10 @@ export function readElementProperties(element: Element, frameWindow: Window, lab
     border: `${style.borderWidth} ${style.borderStyle} ${style.borderColor}`,
     transform: style.transform === 'none' ? '' : style.transform,
     position: style.position,
+    id: element.getAttribute('id') || '',
+    hdvId: element.getAttribute('data-hdv-id') || '',
+    class: element.getAttribute('class') || '',
+    src: element.tagName.toLowerCase() === 'img' ? element.getAttribute('src') || '' : '',
   }
 }
 

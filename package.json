@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "cors": "^2.8.6",
+    "dockview-react": "^6.6.1",
     "express": "^5.2.1",
     "lucide-react": "^1.17.0",
     "mime-types": "^3.0.2",

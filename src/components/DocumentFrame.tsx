@@ -7,6 +7,7 @@ import { cleanTemplateClone, collectSelectionItem, inlineComputedStyles, getElem
 export interface DocumentFrameHandle {
   applyElementEdit: (edit: ElementEdit) => void
   applyDocumentSettings: (settings: DocumentSettings) => void
+  applyGlobalStyle: (css: string) => void
   getSelectedHtml: (inlineStyles: boolean) => string
   refreshSelectionProperties: () => void
   getAncestors: (path: string) => Array<{ tag: string; path: string; label: string }>
@@ -25,10 +26,39 @@ interface DocumentFrameProps {
   onFrameContextMenu?: (x: number, y: number, path: string) => void
   onElementEdit?: (edit: Omit<ElementEdit, 'targetPath'>) => void
   shellClassName?: string
+  slideDeckMode?: boolean
+  currentSlideIndex?: number
+  onSlidesDiscover?: (
+    slides: Array<{ id: string; name: string; elementIndex: number }>,
+    pageSize?: { width: string; height: string }
+  ) => void
+  pendingEdits?: Record<string, ElementEdit>
+  settings?: DocumentSettings
+  globalStyle?: string
+  pendingGlobalStyle?: string | null
+  docScale?: number
 }
 
 export const DocumentFrame = forwardRef<DocumentFrameHandle, DocumentFrameProps>(function DocumentFrame(
-  { documentId, documentPath, reloadToken, selectorEnabled, selectedItems, onSelectionChange, onFrameContextMenu, onElementEdit, shellClassName },
+  {
+    documentId,
+    documentPath,
+    reloadToken,
+    selectorEnabled,
+    selectedItems,
+    onSelectionChange,
+    onFrameContextMenu,
+    onElementEdit,
+    shellClassName,
+    slideDeckMode = false,
+    currentSlideIndex = 0,
+    onSlidesDiscover,
+    pendingEdits,
+    settings,
+    globalStyle = '',
+    pendingGlobalStyle = null,
+    docScale = 1.0,
+  },
   ref,
 ) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
@@ -36,9 +66,14 @@ export const DocumentFrame = forwardRef<DocumentFrameHandle, DocumentFrameProps>
   const selectedPathsRef = useRef<string[]>([])
   const onSelectionChangeRef = useRef(onSelectionChange)
   const onFrameContextMenuRef = useRef(onFrameContextMenu)
+  const onSlidesDiscoverRef = useRef(onSlidesDiscover)
   const dragStateRef = useRef<{ x: number; y: number; active: boolean } | null>(null)
   const lastDragSelectionRef = useRef(false)
   const [pageTurn, setPageTurn] = useState(false)
+
+  useEffect(() => {
+    onSlidesDiscoverRef.current = onSlidesDiscover
+  }, [onSlidesDiscover])
 
   useEffect(() => {
     if (!documentId) return
@@ -66,6 +101,104 @@ export const DocumentFrame = forwardRef<DocumentFrameHandle, DocumentFrameProps>
   useEffect(() => {
     onSelectionChangeRef.current = onSelectionChange
   }, [onSelectionChange])
+
+  function ensureSlideDeckStyles(doc: Document) {
+    let style = doc.querySelector('style#hdv-slide-deck-styles') as HTMLStyleElement
+    
+    // Toggle actual visibility of the slide elements via style display property
+    const slides = findSlideElements(doc)
+    slides.forEach((slide, idx) => {
+      const htmlEl = slide as HTMLElement
+      if (slideDeckMode) {
+        if (idx === currentSlideIndex) {
+          htmlEl.style.removeProperty('display')
+          htmlEl.style.setProperty('margin', '0', 'important')
+          htmlEl.style.setProperty('box-shadow', 'none', 'important')
+          htmlEl.style.setProperty('position', 'relative', 'important')
+          htmlEl.style.setProperty('overflow', 'hidden', 'important')
+          htmlEl.style.setProperty('width', '100%', 'important')
+          htmlEl.style.setProperty('height', '100%', 'important')
+        } else {
+          htmlEl.style.setProperty('display', 'none', 'important')
+        }
+      } else {
+        htmlEl.style.removeProperty('display')
+        htmlEl.style.removeProperty('margin')
+        htmlEl.style.removeProperty('box-shadow')
+        htmlEl.style.removeProperty('position')
+        htmlEl.style.removeProperty('overflow')
+        htmlEl.style.removeProperty('width')
+        htmlEl.style.removeProperty('height')
+      }
+    })
+
+    if (slideDeckMode) {
+      const expectedCss = `
+        /* Clean up and hide Paged.js page wrappers completely for slide view */
+        .pagedjs_pages {
+          display: none !important;
+        }
+        
+        html, body {
+          overflow: hidden !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          background: transparent !important;
+          width: 100% !important;
+          height: 100% !important;
+        }
+      `
+      if (!style) {
+        style = doc.createElement('style')
+        style.setAttribute('id', 'hdv-slide-deck-styles')
+        doc.head.append(style)
+      }
+      if (style.textContent !== expectedCss) {
+        style.textContent = expectedCss
+      }
+    } else {
+      if (style) {
+        style.remove()
+      }
+    }
+  }
+
+  function ensureDocumentScaleStyles(doc: Document) {
+    let style = doc.querySelector('style#hdv-document-scale-styles') as HTMLStyleElement
+    if (!slideDeckMode && docScale !== 1.0) {
+      const expectedCss = `
+        html, body {
+          overflow-x: hidden !important;
+        }
+        .pagedjs_pages {
+          transform: scale(${docScale}) !important;
+          transform-origin: top center !important;
+        }
+      `
+      if (!style) {
+        style = doc.createElement('style')
+        style.setAttribute('id', 'hdv-document-scale-styles')
+        doc.head.append(style)
+      }
+      if (style.textContent !== expectedCss) {
+        style.textContent = expectedCss
+      }
+    } else {
+      if (style) {
+        style.remove()
+      }
+    }
+  }
+
+  // Inject CSS styles for hiding non-active slides in slide deck mode and scaling document pages
+  useEffect(() => {
+    const doc = iframeRef.current?.contentDocument
+    if (doc) {
+      ensureSlideDeckStyles(doc)
+      ensureDocumentScaleStyles(doc)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slideDeckMode, currentSlideIndex, reloadToken, documentId, docScale])
 
   useImperativeHandle(ref, () => ({
     applyElementEdit(edit) {
@@ -165,6 +298,19 @@ export const DocumentFrame = forwardRef<DocumentFrameHandle, DocumentFrameProps>
     getShellElement() {
       return shellRef.current
     },
+    applyGlobalStyle(css) {
+      const doc = iframeRef.current?.contentDocument
+      if (!doc) return
+      const styles = Array.from(doc.head.querySelectorAll('style'))
+      const mainStyle = styles.find(s => !s.hasAttribute('data-hdv-document-settings'))
+      if (mainStyle) {
+        mainStyle.textContent = css
+      } else {
+        const styleEl = doc.createElement('style')
+        styleEl.textContent = css
+        doc.head.appendChild(styleEl)
+      }
+    },
   }))
 
   useEffect(() => {
@@ -193,6 +339,53 @@ export const DocumentFrame = forwardRef<DocumentFrameHandle, DocumentFrameProps>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [documentId, reloadToken])
 
+  function discoverSlides() {
+    const doc = iframeRef.current?.contentDocument
+    if (!doc) return
+
+    ensureSlideDeckStyles(doc)
+
+    const pageElements = findSlideElements(doc)
+    const discoveredSlides = pageElements.map((el, index) => {
+      const name =
+        el.getAttribute('data-component') ||
+        el.getAttribute('data-hdv-id') ||
+        el.getAttribute('id') ||
+        el.querySelector('h1, h2, h3')?.textContent?.trim() ||
+        `Slide ${index + 1}`
+      return {
+        id: el.getAttribute('data-hdv-id') || el.getAttribute('id') || `slide-${index}`,
+        name,
+        elementIndex: index,
+      }
+    })
+
+    let detectedSize: { width: string; height: string } | undefined
+
+    if (!slideDeckMode) {
+      // Detect page size dynamically by measuring the visible page (only in normal document mode)
+      const pages = Array.from(doc.querySelectorAll('.pagedjs_page'))
+      const visiblePage = pages.find(el => {
+        const rect = el.getBoundingClientRect()
+        return rect.width > 0 && rect.height > 0
+      }) || findSlideElements(doc)[0]
+  
+      if (visiblePage) {
+        const style = doc.defaultView?.getComputedStyle(visiblePage)
+        if (style) {
+          detectedSize = {
+            width: style.width,
+            height: style.height,
+          }
+        }
+      }
+    }
+
+    if (onSlidesDiscoverRef.current) {
+      onSlidesDiscoverRef.current(discoveredSlides, detectedSize)
+    }
+  }
+
   function attachFrameListeners() {
     const doc = iframeRef.current?.contentDocument
     if (!doc) {
@@ -209,12 +402,63 @@ export const DocumentFrame = forwardRef<DocumentFrameHandle, DocumentFrameProps>
     doc.addEventListener('mousedown', () => {
       window.parent.dispatchEvent(new CustomEvent('hdv-iframe-mousedown'))
     })
+    doc.addEventListener('keydown', (e: KeyboardEvent) => {
+      window.parent.dispatchEvent(new KeyboardEvent('keydown', {
+        key: e.key,
+        code: e.code,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        shiftKey: e.shiftKey,
+        altKey: e.altKey,
+        bubbles: true
+      }))
+    })
     doc.addEventListener('mouseup', handleMouseUp)
     doc.addEventListener('click', handleClick, true)
     doc.addEventListener('mouseleave', clearHover)
     doc.addEventListener('contextmenu', handleContextMenu)
     setFrameSelectorCursor(selectorEnabledRef.current)
     updateSelectionClasses()
+
+    if (settings) {
+      applyDocumentSettingsInternal(doc, settings)
+    }
+    if (pendingGlobalStyle !== null || globalStyle) {
+      applyGlobalStyleInternal(doc, pendingGlobalStyle !== null ? pendingGlobalStyle : globalStyle)
+    }
+    if (pendingEdits) {
+      applyPendingEditsInternal(doc, pendingEdits)
+    }
+
+    if (!slideDeckMode) {
+      const runPreview = () => {
+        const win = iframeRef.current?.contentWindow as (Window & { PagedPolyfill?: { preview?: () => void } }) | null
+        if (win && win.PagedPolyfill && typeof win.PagedPolyfill.preview === 'function') {
+          win.PagedPolyfill.preview()
+        }
+      }
+      setTimeout(runPreview, 50)
+    }
+
+    let discoverTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleDiscoverSlides = () => {
+      if (discoverTimer) clearTimeout(discoverTimer)
+      discoverTimer = setTimeout(() => {
+        discoverTimer = null
+        discoverSlides()
+      }, 150)
+    }
+
+    const observer = new MutationObserver(() => {
+      scheduleDiscoverSlides()
+    })
+    observer.observe(doc.body || doc.documentElement, {
+      childList: true,
+      subtree: true,
+    })
+
+    // Perform initial slide discovery
+    discoverSlides()
   }
 
   function handleContextMenu(event: MouseEvent) {
@@ -293,7 +537,14 @@ export const DocumentFrame = forwardRef<DocumentFrameHandle, DocumentFrameProps>
       lastDragSelectionRef.current = true
       const rect = normalizeRect(drag.x, drag.y, event.clientX, event.clientY)
       const paths = Array.from(doc.querySelectorAll('[data-hdv-path]'))
-        .filter((element) => intersects(rect, element.getBoundingClientRect()))
+        .filter((element) => {
+          const tagName = element.tagName.toLowerCase()
+          const path = element.getAttribute('data-hdv-path')
+          if (tagName === 'body' || tagName === 'html' || path === '0.1') {
+            return false
+          }
+          return intersects(rect, element.getBoundingClientRect())
+        })
         .map((element) => element.getAttribute('data-hdv-path') || '')
         .filter(Boolean)
       commitSelection(paths, event)
@@ -301,8 +552,13 @@ export const DocumentFrame = forwardRef<DocumentFrameHandle, DocumentFrameProps>
       lastDragSelectionRef.current = false
       const target = selectableFromEvent(event)
       const path = target?.getAttribute('data-hdv-path')
-      if (path) {
+      const tagName = target?.tagName?.toLowerCase()
+      if (path && tagName !== 'body' && tagName !== 'html' && path !== '0.1') {
         commitSelection([path], event)
+      } else {
+        selectedPathsRef.current = []
+        onSelectionChangeRef.current([])
+        updateSelectionClasses()
       }
     }
 
@@ -321,8 +577,13 @@ export const DocumentFrame = forwardRef<DocumentFrameHandle, DocumentFrameProps>
     }
     const target = selectableFromEvent(event)
     const path = target?.getAttribute('data-hdv-path')
-    if (path) {
+    const tagName = target?.tagName?.toLowerCase()
+    if (path && tagName !== 'body' && tagName !== 'html' && path !== '0.1') {
       commitSelection([path], event)
+    } else {
+      selectedPathsRef.current = []
+      onSelectionChangeRef.current([])
+      updateSelectionClasses()
     }
   }
 
@@ -332,7 +593,6 @@ export const DocumentFrame = forwardRef<DocumentFrameHandle, DocumentFrameProps>
     if (!doc || !frameWindow) {
       return
     }
-
 
     let nextPaths = unique(paths)
     if (event.ctrlKey || event.metaKey || event.shiftKey) {
@@ -465,6 +725,11 @@ export const DocumentFrame = forwardRef<DocumentFrameHandle, DocumentFrameProps>
       ref={shellRef}
       onMouseMove={handleMouseMove}
       className={`document-frame-shell ${pageTurn ? 'page-turn' : ''} ${shellClassName || ''}`}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onSelectionChangeRef.current([])
+        }
+      }}
     >
       {documentId ? (
         <iframe
@@ -473,7 +738,7 @@ export const DocumentFrame = forwardRef<DocumentFrameHandle, DocumentFrameProps>
           title="Document preview"
           className="document-frame"
           data-document-path={documentPath || ''}
-          src={`/api/documents/${encodeURIComponent(documentId)}/render?reload=${reloadToken}`}
+          src={`/api/documents/${encodeURIComponent(documentId)}/render?reload=${reloadToken}${slideDeckMode ? '&slideDeck=true' : ''}&preview=true`}
         />
       ) : (
         <div className="empty-canvas">
@@ -613,3 +878,81 @@ function drawDragBox(doc: Document, startX: number, startY: number, endX: number
 function removeDragBox(doc: Document) {
   doc.getElementById('hdv-drag-box')?.remove()
 }
+
+function applyDocumentSettingsInternal(doc: Document, settings: DocumentSettings) {
+  const css = buildSettingsCss(settings)
+  let styleEl = doc.head.querySelector('style[data-hdv-document-settings]')
+  if (!styleEl) {
+    styleEl = doc.head.querySelector('style[data-hdv-preview-settings]')
+    if (styleEl) {
+      styleEl.setAttribute('data-hdv-document-settings', '')
+      styleEl.removeAttribute('data-hdv-preview-settings')
+    }
+  }
+  if (!styleEl) {
+    styleEl = doc.createElement('style')
+    styleEl.setAttribute('data-hdv-document-settings', '')
+    doc.head.appendChild(styleEl)
+  }
+  styleEl.textContent = css
+}
+
+function applyGlobalStyleInternal(doc: Document, css: string) {
+  const styles = Array.from(doc.head.querySelectorAll('style'))
+  const mainStyle = styles.find(s => !s.hasAttribute('data-hdv-document-settings') && !s.hasAttribute('data-hdv-preview-settings'))
+  if (mainStyle) {
+    mainStyle.textContent = css
+  } else {
+    const styleEl = doc.createElement('style')
+    styleEl.textContent = css
+    doc.head.appendChild(styleEl)
+  }
+}
+
+function applyPendingEditsInternal(doc: Document, pendingEdits: Record<string, ElementEdit>) {
+  for (const edit of Object.values(pendingEdits)) {
+    for (const element of findAllByPath(doc, edit.targetPath)) {
+      const htmlElement = element as HTMLElement
+      if (edit.styles) {
+        for (const [name, value] of Object.entries(edit.styles)) {
+          htmlElement.style.setProperty(name, value || '')
+        }
+      }
+      if (edit.attributes) {
+        for (const [name, value] of Object.entries(edit.attributes)) {
+          if (value === null) {
+            element.removeAttribute(name)
+          } else {
+            element.setAttribute(name, value)
+          }
+        }
+      }
+      if (typeof edit.textContent === 'string') {
+        element.textContent = edit.textContent
+      }
+    }
+  }
+}
+
+function findSlideElements(doc: Document): HTMLElement[] {
+  // Heuristic 1: Look for explicit .page or .slide classes, or class substring match
+  let elements = Array.from(doc.querySelectorAll('.page, .slide, [class*="page" i], [class*="slide" i]')) as HTMLElement[]
+  
+  // Heuristic 2: If none found, look for data-component or data-hdv-id or id containing "slide" or "page"
+  if (elements.length === 0) {
+    elements = Array.from(doc.querySelectorAll(
+      '[data-component*="slide" i], [data-component*="page" i], [data-hdv-id*="slide" i], [data-hdv-id*="page" i], [id*="slide" i], [id*="page" i]'
+    )) as HTMLElement[]
+  }
+  
+  // Heuristic 3: If still none found, fall back to top-level sectioning elements inside body
+  if (elements.length === 0) {
+    elements = Array.from(doc.querySelectorAll('body > section, body > main, body > article')) as HTMLElement[]
+  }
+
+  // Filter out duplicate or nested elements. We only want the outermost slide container!
+  return elements.filter((el, _, self) => {
+    return !self.some(other => other !== el && other.contains(el))
+  })
+}
+
