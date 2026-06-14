@@ -4,8 +4,6 @@ export type ThemeMode = "system" | "dark" | "light" | "true-black";
 export type AccentColor = "blue" | "purple" | "teal" | "orange" | "rose";
 
 interface SettingsScreenProps {
-  tokenInput: string;
-  onTokenChange: (value: string) => void;
   accent: AccentColor;
   theme: ThemeMode;
   onAccentChange: (value: AccentColor) => void;
@@ -16,8 +14,6 @@ interface SettingsScreenProps {
 }
 
 export function SettingsScreen({
-  tokenInput,
-  onTokenChange,
   accent,
   theme,
   onAccentChange,
@@ -39,23 +35,6 @@ export function SettingsScreen({
 
         <div className="settings-content-scroll">
           <div className="settings-form-box">
-            <h3>Remote Security Settings</h3>
-            <p className="settings-desc">
-              Provide an authorization token to enable write/export options
-              for remote servers.
-            </p>
-            <div className="settings-row-input">
-              <input
-                value={tokenInput}
-                type="password"
-                onChange={(event) => onTokenChange(event.target.value)}
-                placeholder="Enter remote secure access token…"
-                style={{ maxWidth: 360 }}
-              />
-            </div>
-
-            <div className="settings-divider" />
-
             <h3>Interface Customization</h3>
             <p className="settings-desc">
               Change the interface theme and accent highlight.

@@ -31,9 +31,6 @@ async function main() {
     const server = app.listen(attemptPort, host, () => {
       const url = `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${attemptPort}`
       console.log(`HTML Document Viewer running at ${url}`)
-      if (host === '0.0.0.0') {
-        console.log('Remote access is enabled. Set HDV_TOKEN to allow write/export actions through a public host.')
-      }
     })
 
     server.on('error', (err: Error & { code?: string }) => {

@@ -21,12 +21,13 @@ import {
   Undo,
   Redo,
   Copy,
+  Settings,
 } from "lucide-react";
 import "./App.css";
 import { DockviewReact, DockviewApi } from "dockview-react";
 import type { DockviewReadyEvent } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
-import { api, getStoredToken, setStoredToken } from "./api";
+import { api } from "./api";
 import {
   DocumentFrame,
   type DocumentFrameHandle,
@@ -174,7 +175,6 @@ function App() {
   const [renameTemplateName, setRenameTemplateName] = useState("");
   const [activeInspectorTab, setActiveInspectorTab] =
     useState<InspectorTab>("selection");
-  const [tokenInput, setTokenInput] = useState(getStoredToken());
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("Loading documents…");
   const [busy, setBusy] = useState(false);
@@ -1089,11 +1089,6 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function updateToken(value: string) {
-    setTokenInput(value);
-    setStoredToken(value);
-  }
-
   function handleSettingsChange(nextSettings: DocumentSettings) {
     setSettings(nextSettings);
     setSettingsDirty(true);
@@ -1185,16 +1180,25 @@ function App() {
       return;
     }
     await runTask("HTML export created.", async () => {
-      const result = await api.exportHtml(activeDocument.id);
+      const response = await fetch(
+        `/api/documents/${encodeURIComponent(activeDocument.id)}/export/html`,
+        { method: "POST" }
+      );
+      if (!response.ok) throw new Error("Export failed");
+      const blob = await response.blob();
+      const disposition = response.headers.get("content-disposition");
+      const match = disposition?.match(/filename\*?=(?:UTF-8'')?["']?([^"';]+)["']?/i);
+      const filename = match ? decodeURIComponent(match[1]) : "export.html";
       triggerConfetti();
-      const filename = result.path.split(/[/\\]/).pop() || "export.html";
+      const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
-      link.href = `/api/exports/download?filename=${encodeURIComponent(filename)}`;
+      link.href = url;
       link.setAttribute("download", filename);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      return `HTML export: ${result.path}`;
+      URL.revokeObjectURL(url);
+      return `HTML export: ${filename}`;
     });
   }
 
@@ -1203,16 +1207,25 @@ function App() {
       return;
     }
     await runTask("PDF export created.", async () => {
-      const result = await api.exportPdf(activeDocument.id);
+      const response = await fetch(
+        `/api/documents/${encodeURIComponent(activeDocument.id)}/export/pdf`,
+        { method: "POST" }
+      );
+      if (!response.ok) throw new Error("Export failed");
+      const blob = await response.blob();
+      const disposition = response.headers.get("content-disposition");
+      const match = disposition?.match(/filename\*?=(?:UTF-8'')?["']?([^"';]+)["']?/i);
+      const filename = match ? decodeURIComponent(match[1]) : "export.pdf";
       triggerConfetti();
-      const filename = result.path.split(/[/\\]/).pop() || "export.pdf";
+      const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
-      link.href = `/api/exports/download?filename=${encodeURIComponent(filename)}`;
+      link.href = url;
       link.setAttribute("download", filename);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      return `PDF export: ${result.path}`;
+      URL.revokeObjectURL(url);
+      return `PDF export: ${filename}`;
     });
   }
 
@@ -1645,8 +1658,6 @@ function App() {
   function renderSettingsScreen() {
     return (
       <SettingsScreen
-        tokenInput={tokenInput}
-        onTokenChange={updateToken}
         accent={accent}
         theme={theme}
         onAccentChange={setAccent}
@@ -2207,6 +2218,18 @@ function App() {
             }
           >
             <Library size={12} />
+          </IconButton>
+
+          <div className="toolbar-divider" />
+
+          <IconButton
+            title="Preferences"
+            active={activeView === "settings"}
+            onClick={() =>
+              setActiveView(activeView === "settings" ? "editor" : "settings")
+            }
+          >
+            <Settings size={12} />
           </IconButton>
         </div>
       </header>

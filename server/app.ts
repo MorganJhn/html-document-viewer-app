@@ -63,7 +63,7 @@ export function createApp() {
     }
   })
 
-  app.post('/api/workspace', requireWriteToken, async (req, res, next) => {
+  app.post('/api/workspace', async (req, res, next) => {
     try {
       const requestedPath = String(req.body?.workspacePath || defaultWorkspacePath())
       const workspacePath = path.resolve(requestedPath)
@@ -103,7 +103,7 @@ export function createApp() {
     }
   })
 
-  app.post('/api/documents', requireWriteToken, async (req, res, next) => {
+  app.post('/api/documents', async (req, res, next) => {
     try {
       const config = await getWorkspaceConfig()
       const name = String(req.body?.name || '').trim()
@@ -265,7 +265,7 @@ export function createApp() {
     }
   })
 
-  app.post('/api/documents/:id/assets', requireWriteToken, async (req, res, next) => {
+  app.post('/api/documents/:id/assets', async (req, res, next) => {
     try {
       const config = await getWorkspaceConfig()
       const documentId = paramValue(req.params.id)
@@ -294,7 +294,7 @@ export function createApp() {
     }
   })
 
-  app.post('/api/documents/:id/edits', requireWriteToken, async (req, res, next) => {
+  app.post('/api/documents/:id/edits', async (req, res, next) => {
     try {
       const config = await getWorkspaceConfig()
       const documentId = paramValue(req.params.id)
@@ -312,19 +312,21 @@ export function createApp() {
     }
   })
 
-  app.post('/api/documents/:id/export/html', requireWriteToken, async (req, res, next) => {
+  app.post('/api/documents/:id/export/html', async (req, res, next) => {
     try {
       const config = await getWorkspaceConfig()
       const documentId = paramValue(req.params.id)
       const documentPath = await resolveDocument(config.workspacePath, documentId)
       const outputPath = await exportViewableHtml(config.workspacePath, documentPath, documentId)
-      res.json({ ok: true, path: outputPath })
+      const docName = path.basename(documentPath, '.html')
+      const filename = `${docName}-export.html`
+      res.download(outputPath, filename)
     } catch (error) {
       next(error)
     }
   })
 
-  app.post('/api/documents/:id/export/pdf', requireWriteToken, async (req, res, next) => {
+  app.post('/api/documents/:id/export/pdf', async (req, res, next) => {
     try {
       const config = await getWorkspaceConfig()
       const documentId = paramValue(req.params.id)
@@ -334,7 +336,8 @@ export function createApp() {
       const isSlideDeck = settings.pageSizePreset === 'Slide16_9'
       const renderUrl = `http://127.0.0.1:${req.socket.localPort}/api/documents/${encodeURIComponent(documentId)}/render${isSlideDeck ? '?slideDeck=true' : ''}`
       const outputPath = await exportPdf(config.workspacePath, documentPath, renderUrl)
-      res.json({ ok: true, path: outputPath })
+      const filename = path.basename(outputPath)
+      res.download(outputPath, filename)
     } catch (error) {
       next(error)
     }
@@ -373,7 +376,7 @@ export function createApp() {
     }
   })
 
-  app.post('/api/templates', requireWriteToken, async (req, res, next) => {
+  app.post('/api/templates', async (req, res, next) => {
     try {
       const config = await getWorkspaceConfig()
       const sourceDocumentId = typeof req.body?.sourceDocumentId === 'string' ? req.body.sourceDocumentId : undefined
@@ -392,7 +395,7 @@ export function createApp() {
     }
   })
 
-  app.patch('/api/templates/:id', requireWriteToken, async (req, res, next) => {
+  app.patch('/api/templates/:id', async (req, res, next) => {
     try {
       const config = await getWorkspaceConfig()
       const template = await updateTemplate(config.workspacePath, paramValue(req.params.id), {
@@ -404,7 +407,7 @@ export function createApp() {
     }
   })
 
-  app.delete('/api/templates/:id', requireWriteToken, async (req, res, next) => {
+  app.delete('/api/templates/:id', async (req, res, next) => {
     try {
       const config = await getWorkspaceConfig()
       await deleteTemplate(config.workspacePath, paramValue(req.params.id))
@@ -414,7 +417,7 @@ export function createApp() {
     }
   })
 
-  app.post('/api/documents/:id/templates/insert', requireWriteToken, async (req, res, next) => {
+  app.post('/api/documents/:id/templates/insert', async (req, res, next) => {
     try {
       const config = await getWorkspaceConfig()
       const documentId = paramValue(req.params.id)
@@ -447,30 +450,6 @@ async function getWorkspaceConfig() {
 async function getDocumentRelativePath(workspacePath: string, documentId: string) {
   const documentPath = await resolveDocument(workspacePath, documentId)
   return path.relative(workspacePath, documentPath).replaceAll(path.sep, '/')
-}
-
-function requireWriteToken(req: Request, res: Response, next: NextFunction) {
-  if (isLocalRequest(req)) {
-    next()
-    return
-  }
-
-  const expected = process.env.HDV_TOKEN
-  const actual = req.header('x-hdv-token') || req.query.token
-  if (!expected || actual !== expected) {
-    res.status(401).json({
-      error: 'TOKEN_REQUIRED',
-      message: 'Set HDV_TOKEN on the server and send it as x-hdv-token for write/export actions.',
-    })
-    return
-  }
-
-  next()
-}
-
-function isLocalRequest(req: Request) {
-  const host = req.hostname
-  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]'
 }
 
 function paramValue(value: string | string[] | undefined) {
